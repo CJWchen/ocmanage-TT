@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 import shutil
 from pathlib import Path
 
@@ -24,7 +25,7 @@ from .config import (
     state_dir_for_profile,
     write_runtime_meta,
 )
-from .system import run_openclaw_command, run_shell
+from .system import list_port_owners, run_openclaw_command, run_shell
 
 DEFAULT_PORT = 18789
 PORT_STEP = 1000
@@ -61,11 +62,12 @@ def docker_workspace_dir_for_profile(profile: str) -> Path:
 def resolve_create_port(payload: dict) -> int:
     port = payload.get("port")
     if port in (None, ""):
-        return suggest_next_gateway_port(read_configured_gateway_ports())
+        return find_next_available_gateway_port(read_configured_gateway_ports())
 
     value = int(port)
     if value <= 0 or value > 65535:
         raise ValueError(f"非法端口: {port}")
+    ensure_port_available_for_create(value)
     return value
 
 
@@ -89,6 +91,35 @@ def suggest_next_gateway_port(existing_ports: list[int]) -> int:
             return candidate
         candidate += PORT_STEP
     raise ValueError("未找到可用端口")
+
+
+def find_next_available_gateway_port(existing_ports: list[int]) -> int:
+    blocked_ports = list(existing_ports)
+    while True:
+        candidate = suggest_next_gateway_port(blocked_ports)
+        if not list_port_owners(candidate):
+            return candidate
+        blocked_ports.append(candidate)
+
+
+def _format_port_owner(owner: dict) -> str:
+    local_address = str(owner.get("localAddress") or owner.get("raw") or "<unknown>")
+    process = str(owner.get("process") or "").strip()
+    if process:
+        return f"{local_address} ({process})"
+    return local_address
+
+
+def ensure_port_available_for_create(port: int) -> None:
+    owners = list_port_owners(port)
+    if not owners:
+        return
+
+    snippets = [_format_port_owner(owner) for owner in owners[:3]]
+    detail = "；".join(snippets)
+    if len(owners) > 3:
+        detail = f"{detail}；以及另外 {len(owners) - 3} 个监听"
+    raise ValueError(f"端口 {port} 已被宿主机占用，请改用其他端口。当前监听: {detail}")
 
 
 def build_docker_control_script_text(compose_dir: Path, project_name: str) -> str:
@@ -371,6 +402,106 @@ def _remove_empty_dir_if_exists(path: Path) -> None:
         return
     except OSError:
         return
+
+
+def _command_output(result) -> str:
+    return "\n".join(part for part in ((result.stdout or "").strip(), (result.stderr or "").strip()) if part).strip()
+
+
+def _docker_resource_missing(detail: str) -> bool:
+    lowered = detail.lower()
+    return "no such" in lowered or "not found" in lowered
+
+
+def _docker_resource_exists(resource: str, name: str) -> bool:
+    result = run_shell(f"docker {resource} inspect {shlex.quote(name)}", timeout_ms=15000)
+    if result.returncode == 0:
+        return True
+
+    detail = _command_output(result)
+    if _docker_resource_missing(detail):
+        return False
+    raise RuntimeError(f"检查 Docker {resource} {name} 失败: {detail or 'unknown error'}")
+
+
+def _list_docker_project_networks(project_name: str) -> list[str]:
+    result = run_shell(
+        f"docker network ls --filter label=com.docker.compose.project={shlex.quote(project_name)} --format '{{{{.Name}}}}'",
+        timeout_ms=15000,
+    )
+    if result.returncode != 0:
+        detail = _command_output(result)
+        raise RuntimeError(f"列出 Docker 网络失败: {detail or 'unknown error'}")
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
+def teardown_docker_runtime(profile: str, runtime_meta: dict | None = None) -> dict:
+    runtime_meta = runtime_meta if isinstance(runtime_meta, dict) else {}
+    compose_path_value = runtime_meta.get("composePath")
+    compose_path = (
+        Path(compose_path_value)
+        if isinstance(compose_path_value, str) and compose_path_value
+        else docker_compose_path_for_profile(profile)
+    )
+    project_name = runtime_meta.get("projectName") if isinstance(runtime_meta.get("projectName"), str) else None
+    container_name = runtime_meta.get("containerName") if isinstance(runtime_meta.get("containerName"), str) else None
+    project_name = project_name or docker_project_name_for_profile(profile)
+    container_name = container_name or docker_container_name_for_profile(profile)
+
+    actions: list[str] = []
+    stdout_parts: list[str] = []
+    stderr_parts: list[str] = []
+
+    if compose_path.exists():
+        result = run_shell(
+            f"docker compose --project-name {shlex.quote(project_name)} -f {shlex.quote(str(compose_path))} down --remove-orphans",
+            timeout_ms=45000,
+            cwd=compose_path.parent,
+        )
+        stdout_parts.append((result.stdout or "").strip())
+        stderr_parts.append((result.stderr or "").strip())
+        if result.returncode != 0:
+            detail = _command_output(result)
+            raise RuntimeError(f"停止 Docker compose 项目 {project_name} 失败: {detail or 'unknown error'}")
+        actions.append(f"已执行 docker compose down: {project_name}")
+        return {
+            "stdout": "\n".join(part for part in stdout_parts if part),
+            "stderr": "\n".join(part for part in stderr_parts if part),
+            "actions": actions,
+        }
+
+    actions.append(f"compose 文件缺失，改用容器/网络兜底清理: {project_name}")
+    if _docker_resource_exists("container", container_name):
+        container_result = run_shell(f"docker rm -f {shlex.quote(container_name)}", timeout_ms=30000)
+        stdout_parts.append((container_result.stdout or "").strip())
+        stderr_parts.append((container_result.stderr or "").strip())
+        if container_result.returncode != 0:
+            detail = _command_output(container_result)
+            raise RuntimeError(f"删除 Docker 容器 {container_name} 失败: {detail or 'unknown error'}")
+        actions.append(f"已删除 Docker 容器: {container_name}")
+    else:
+        actions.append(f"Docker 容器已不存在: {container_name}")
+
+    network_names = _list_docker_project_networks(project_name)
+    if not network_names:
+        actions.append(f"未发现 compose 项目网络: {project_name}")
+    for network_name in network_names:
+        if not _docker_resource_exists("network", network_name):
+            actions.append(f"Docker 网络已不存在: {network_name}")
+            continue
+        network_result = run_shell(f"docker network rm {shlex.quote(network_name)}", timeout_ms=30000)
+        stdout_parts.append((network_result.stdout or "").strip())
+        stderr_parts.append((network_result.stderr or "").strip())
+        if network_result.returncode != 0:
+            detail = _command_output(network_result)
+            raise RuntimeError(f"删除 Docker 网络 {network_name} 失败: {detail or 'unknown error'}")
+        actions.append(f"已删除 Docker 网络: {network_name}")
+
+    return {
+        "stdout": "\n".join(part for part in stdout_parts if part),
+        "stderr": "\n".join(part for part in stderr_parts if part),
+        "actions": actions,
+    }
 
 
 def rollback_failed_docker_create(snapshot: dict, service_name: str) -> list[str]:

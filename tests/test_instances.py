@@ -1,9 +1,15 @@
+import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from manager_tt_backend.instances import build_docker_bridge_alignment_check, list_instances
+from manager_tt_backend.instances import (
+    build_docker_bridge_alignment_check,
+    build_path_translation,
+    find_docker_session_host_path_refs,
+    list_instances,
+)
 
 
 class DockerBridgeAlignmentCheckTests(unittest.TestCase):
@@ -74,6 +80,99 @@ class InstanceListingFallbackTests(unittest.TestCase):
         self.assertEqual(items[0]["runtimeMode"], "docker")
         self.assertEqual(items[0]["hostControlBridge"], {"enabled": True, "listenPort": 58081})
         self.assertIn("bad config", items[0]["error"])
+
+
+class DockerSessionPathSafetyTests(unittest.TestCase):
+    def test_same_path_state_mount_is_treated_as_container_safe(self) -> None:
+        with TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            home.mkdir()
+            state_dir = home / ".openclaw-designer"
+            workspace_dir = home / ".openclaw" / "workspace-designer"
+            sessions_dir = state_dir / "agents" / "main" / "sessions"
+            sessions_dir.mkdir(parents=True, exist_ok=True)
+            compose_path = home / ".openclaw-designer-docker" / "docker-compose.yml"
+            compose_path.parent.mkdir(parents=True, exist_ok=True)
+            compose_path.write_text(
+                "\n".join(
+                    [
+                        "services:",
+                        "  openclaw-gateway:",
+                        "    volumes:",
+                        f"      - {state_dir}:/home/node/.openclaw",
+                        f"      - {state_dir}:{state_dir}",
+                        f"      - {workspace_dir}:{workspace_dir}",
+                        "",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            session_path = sessions_dir / "designer.jsonl"
+            session_path.write_text(
+                json.dumps(
+                    {
+                        "cwd": str(state_dir / "npm" / "node_modules" / "@openclaw" / "feishu"),
+                        "workspaceDir": str(workspace_dir),
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            runtime = {
+                "runtimeMode": "docker",
+                "runtimeMeta": {
+                    "composePath": str(compose_path),
+                    "workspaceHostPath": str(workspace_dir),
+                    "workspaceContainerPath": str(workspace_dir),
+                },
+            }
+            summary = {"workspace": str(workspace_dir)}
+
+            with patch("manager_tt_backend.config.HOME", home):
+                translation = build_path_translation("designer", summary, runtime)
+                hits = find_docker_session_host_path_refs("designer", summary, runtime)
+
+        self.assertIn(str(state_dir), translation["containerStateAliases"])
+        self.assertEqual(hits, [])
+
+    def test_translated_state_paths_still_warn_without_same_path_mount(self) -> None:
+        with TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            home.mkdir()
+            state_dir = home / ".openclaw-designer"
+            sessions_dir = state_dir / "agents" / "main" / "sessions"
+            sessions_dir.mkdir(parents=True, exist_ok=True)
+            compose_path = home / ".openclaw-designer-docker" / "docker-compose.yml"
+            compose_path.parent.mkdir(parents=True, exist_ok=True)
+            compose_path.write_text(
+                "\n".join(
+                    [
+                        "services:",
+                        "  openclaw-gateway:",
+                        "    volumes:",
+                        f"      - {state_dir}:/home/node/.openclaw",
+                        "",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            session_path = sessions_dir / "designer.jsonl"
+            session_path.write_text(
+                json.dumps({"configPath": str(state_dir / "openclaw.json")}, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            runtime = {
+                "runtimeMode": "docker",
+                "runtimeMeta": {
+                    "composePath": str(compose_path),
+                },
+            }
+
+            with patch("manager_tt_backend.config.HOME", home):
+                hits = find_docker_session_host_path_refs("designer", {}, runtime)
+
+        self.assertEqual(hits, [str(session_path)])
 
 
 if __name__ == "__main__":

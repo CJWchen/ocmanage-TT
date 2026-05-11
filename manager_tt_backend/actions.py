@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import datetime as dt
 import json
 import shlex
+import shutil
 from pathlib import Path
 
 from .config import (
@@ -12,17 +14,19 @@ from .config import (
     load_json,
     normalize_profile,
     read_runtime_meta,
+    runtime_meta_path_for_profile,
     service_name_for_profile,
     state_dir_for_profile,
     utc_now_iso,
     write_json,
 )
-from .create_modes import DOCKER_CREATE_MODE, HOST_CREATE_MODE, ensure_host_create_allowed, normalize_runtime_mode, resolve_create_mode
+from .create_modes import HOST_CREATE_MODE, ensure_host_create_allowed, normalize_runtime_mode, resolve_create_mode
 from .docker_managed import (
     build_docker_override_text,
     create_instance_via_docker_manager,
     docker_compose_dir_for_profile,
     docker_control_script_path_for_profile,
+    teardown_docker_runtime,
 )
 from .host_managed import create_instance_via_host_manager, ensure_instance_via_host_manager
 from .instances import (
@@ -34,6 +38,43 @@ from .instances import (
     reset_docker_sessions,
 )
 from .system import backup_file, read_text_if_exists, run_shell
+
+
+def _deleted_snapshot_path(path: Path) -> Path:
+    stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    candidate = path.with_name(f"{path.name}.deleted.{stamp}.manager-tt")
+    counter = 1
+    while candidate.exists():
+        counter += 1
+        candidate = path.with_name(f"{path.name}.deleted.{stamp}.{counter}.manager-tt")
+    return candidate
+
+
+def _archive_path_if_exists(path: Path) -> Path | None:
+    if not path.exists():
+        return None
+    archived = _deleted_snapshot_path(path)
+    path.rename(archived)
+    return archived
+
+
+def _remove_path_if_exists(path: Path) -> bool:
+    if path.is_dir():
+        shutil.rmtree(path)
+        return True
+    if path.exists():
+        path.unlink()
+        return True
+    return False
+
+
+def _remove_empty_dir_if_exists(path: Path) -> None:
+    try:
+        path.rmdir()
+    except FileNotFoundError:
+        return
+    except OSError:
+        return
 
 
 def run_systemctl_action(service_name: str, action: str) -> dict:
@@ -223,33 +264,84 @@ def delete_instance(payload: dict) -> dict:
         raise ValueError("默认实例不允许删除")
 
     remove_state = bool(payload.get("removeStateDir", False))
-    runtime_mode = normalize_runtime_mode((read_runtime_meta(profile) or {}).get("runtimeMode"))
     service_name = service_name_for_profile(profile)
     state_dir = state_dir_for_profile(profile)
+    config_path = config_path_for_profile(profile)
+    runtime_meta_path = runtime_meta_path_for_profile(profile)
+    runtime_meta = read_runtime_meta(profile)
+    runtime_mode = normalize_runtime_mode((runtime_meta or {}).get("runtimeMode"))
+    bridge_tool_path = state_dir / "tools" / "openclaw_host_bridge.py"
     service_path = OPENCLAW_SYSTEMD_DIR / service_name
     override_dir = OPENCLAW_SYSTEMD_DIR / f"{service_name}.d"
+    docker_compose_dir = docker_compose_dir_for_profile(profile)
+    docker_control_script_path = docker_control_script_path_for_profile(profile)
+    bridge_token_path = bridge_token_path_for_profile(profile)
+    archived_paths: list[str] = []
+    removed_paths: list[str] = []
 
-    commands = [
-        f"systemctl --user disable --now {service_name} 2>/dev/null || true",
-        f"rm -f {service_path}",
-        f"rm -rf {override_dir}",
-        "systemctl --user daemon-reload",
-    ]
+    stop_result = run_shell(
+        f"systemctl --user disable --now {shlex.quote(service_name)} 2>/dev/null || true",
+        timeout_ms=30000,
+    )
+
+    docker_cleanup = {"stdout": "", "stderr": "", "actions": []}
+    docker_cleanup_needed = (
+        runtime_mode == "docker"
+        or docker_compose_dir.exists()
+        or docker_control_script_path.exists()
+        or bridge_token_path.exists()
+    )
+    if docker_cleanup_needed:
+        docker_cleanup = teardown_docker_runtime(profile, runtime_meta)
+
+    for path in (service_path, override_dir):
+        if _remove_path_if_exists(path):
+            removed_paths.append(str(path))
+
     if remove_state:
-        commands.append(f"rm -rf {shlex.quote(str(state_dir))}")
-        if runtime_mode == DOCKER_CREATE_MODE:
-            commands.extend(
-                [
-                    f"rm -rf {shlex.quote(str(docker_compose_dir_for_profile(profile)))}",
-                    f"rm -f {shlex.quote(str(docker_control_script_path_for_profile(profile)))}",
-                    f"rm -f {shlex.quote(str(bridge_token_path_for_profile(profile)))}",
-                ]
-            )
-    result = run_shell(" && ".join(commands), timeout_ms=45000)
+        if _remove_path_if_exists(state_dir):
+            removed_paths.append(str(state_dir))
+    else:
+        # Preserve user data, but retire the discovery/runtime files so the
+        # deleted profile stops participating in instance scans and port checks.
+        for path in (config_path, runtime_meta_path):
+            archived = _archive_path_if_exists(path)
+            if archived:
+                archived_paths.append(str(archived))
+        if _remove_path_if_exists(bridge_tool_path):
+            removed_paths.append(str(bridge_tool_path))
+            _remove_empty_dir_if_exists(bridge_tool_path.parent)
+
+    for path in (docker_compose_dir, docker_control_script_path, bridge_token_path):
+        if _remove_path_if_exists(path):
+            removed_paths.append(str(path))
+
+    daemon_reload = run_shell("systemctl --user daemon-reload", timeout_ms=20000)
+    stdout = "\n".join(
+        part
+        for part in (
+            (stop_result.stdout or "").strip(),
+            (docker_cleanup.get("stdout") or "").strip(),
+            (daemon_reload.stdout or "").strip(),
+        )
+        if part
+    )
+    stderr = "\n".join(
+        part
+        for part in (
+            (stop_result.stderr or "").strip(),
+            (docker_cleanup.get("stderr") or "").strip(),
+            (daemon_reload.stderr or "").strip(),
+        )
+        if part
+    )
     return {
-        "stdout": result.stdout,
-        "stderr": result.stderr,
-        "returncode": result.returncode,
+        "stdout": stdout,
+        "stderr": stderr,
+        "returncode": daemon_reload.returncode,
+        "archivedPaths": archived_paths,
+        "removedPaths": removed_paths,
+        "dockerCleanupActions": docker_cleanup.get("actions") or [],
     }
 
 

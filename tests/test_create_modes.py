@@ -1,5 +1,6 @@
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from manager_tt_backend.create_modes import (
     DOCKER_CREATE_MODE,
@@ -10,7 +11,11 @@ from manager_tt_backend.create_modes import (
     normalize_runtime_mode,
     resolve_create_mode,
 )
-from manager_tt_backend.docker_managed import build_docker_runtime_meta, suggest_next_gateway_port
+from manager_tt_backend.docker_managed import (
+    build_docker_runtime_meta,
+    resolve_create_port,
+    suggest_next_gateway_port,
+)
 
 
 class CreateModeTests(unittest.TestCase):
@@ -45,6 +50,15 @@ class CreateModeTests(unittest.TestCase):
 class DockerManagedPureLogicTests(unittest.TestCase):
     def test_suggest_next_gateway_port_uses_existing_port_series(self) -> None:
         self.assertEqual(suggest_next_gateway_port([18789, 19789, 20789]), 21789)
+
+    @patch("manager_tt_backend.docker_managed.list_port_owners")
+    @patch("manager_tt_backend.docker_managed.read_configured_gateway_ports", return_value=[18789, 19789, 20789])
+    def test_resolve_create_port_skips_host_occupied_auto_candidate(self, _, list_port_owners) -> None:
+        list_port_owners.side_effect = lambda port: (
+            [{"localAddress": "127.0.0.1:21789", "process": "users:((\"docker-proxy\"))"}] if port == 21789 else []
+        )
+
+        self.assertEqual(resolve_create_port({}), 22789)
 
     def test_build_docker_runtime_meta_uses_preserved_workspace_shape(self) -> None:
         meta = build_docker_runtime_meta(

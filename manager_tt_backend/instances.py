@@ -43,6 +43,23 @@ from .system import (
     shell_join,
 )
 
+SESSION_PATH_FIELDS = (
+    "workspaceDir",
+    "cwd",
+    "path",
+    "filePath",
+    "baseDir",
+    "rootDir",
+    "configPath",
+    "sessionFile",
+)
+SESSION_PATH_VALUE_PATTERN = re.compile(
+    rf'"(?P<field>{"|".join(SESSION_PATH_FIELDS)})"\s*:\s*"(?P<path>(?:\\.|[^"])*)"'
+)
+DOCKER_BIND_MOUNT_PATTERN = re.compile(
+    r"^\s*-\s*(?P<host>/[^:\s]+):(?P<container>/[^:\s]+)(?::[^#\s]+)?\s*$"
+)
+
 
 def parse_feishu_channel(config: dict) -> dict:
     feishu = config.get("channels", {}).get("feishu", {})
@@ -120,6 +137,78 @@ def build_host_visible_paths(profile: str, summary: dict, runtime: dict) -> dict
     return paths
 
 
+def normalize_absolute_path(path: str | None) -> str | None:
+    if not isinstance(path, str):
+        return None
+    candidate = path.strip()
+    if not candidate.startswith("/"):
+        return None
+    if candidate != "/":
+        candidate = candidate.rstrip("/")
+    return candidate or "/"
+
+
+def path_is_within_root(path: str, root: str) -> bool:
+    return path == root or path.startswith(f"{root}/")
+
+
+def read_compose_bind_mounts(runtime_meta: dict) -> list[tuple[str, str]]:
+    compose_path_value = runtime_meta.get("composePath")
+    compose_path = Path(compose_path_value) if isinstance(compose_path_value, str) and compose_path_value else None
+    if not compose_path or not compose_path.exists():
+        return []
+    try:
+        lines = compose_path.read_text(encoding="utf-8").splitlines()
+    except Exception:
+        return []
+    mounts: list[tuple[str, str]] = []
+    for line in lines:
+        match = DOCKER_BIND_MOUNT_PATTERN.match(line)
+        if not match:
+            continue
+        host_path = normalize_absolute_path(match.group("host"))
+        container_path = normalize_absolute_path(match.group("container"))
+        if host_path and container_path:
+            mounts.append((host_path, container_path))
+    return mounts
+
+
+def collect_docker_path_mappings(profile: str, summary: dict | None = None, runtime: dict | None = None) -> list[dict]:
+    runtime_meta = (runtime or {}).get("runtimeMeta") or {}
+    workspace = summary.get("workspace") if summary else None
+    host_state_dir = normalize_absolute_path(str(state_dir_for_profile(profile)))
+    host_workspace_dir = normalize_absolute_path(runtime_meta.get("workspaceHostPath")) or normalize_absolute_path(
+        resolve_workspace_path(profile, workspace, runtime)
+    )
+    container_workspace_dir = normalize_absolute_path(runtime_meta.get("workspaceContainerPath")) or normalize_absolute_path(
+        CONTAINER_WORKSPACE_DIR
+    )
+
+    mappings: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+
+    def add_mapping(host_path: str | None, container_path: str | None, source: str) -> None:
+        if not host_path or not container_path:
+            return
+        key = (host_path, container_path)
+        if key in seen:
+            return
+        seen.add(key)
+        mappings.append(
+            {
+                "hostPath": host_path,
+                "containerPath": container_path,
+                "source": source,
+            }
+        )
+
+    add_mapping(host_state_dir, normalize_absolute_path(CONTAINER_STATE_DIR), "state-dir-default")
+    add_mapping(host_workspace_dir, container_workspace_dir, "workspace-default")
+    for host_path, container_path in read_compose_bind_mounts(runtime_meta):
+        add_mapping(host_path, container_path, "compose")
+    return mappings
+
+
 def build_path_translation(profile: str, summary: dict | None = None, runtime: dict | None = None) -> dict:
     host_state_dir = state_dir_for_profile(profile)
     runtime_meta = (runtime or {}).get("runtimeMeta") or {}
@@ -130,11 +219,17 @@ def build_path_translation(profile: str, summary: dict | None = None, runtime: d
         host_workspace_dir = resolve_workspace_path(profile, workspace, runtime)
     if not isinstance(container_workspace_dir, str) or not container_workspace_dir.startswith("/"):
         container_workspace_dir = CONTAINER_WORKSPACE_DIR
+    mappings = collect_docker_path_mappings(profile, summary, runtime)
+    state_aliases = [item["containerPath"] for item in mappings if item["hostPath"] == str(host_state_dir)]
+    workspace_aliases = [item["containerPath"] for item in mappings if item["hostPath"] == host_workspace_dir]
     return {
         "hostStateDir": str(host_state_dir),
         "containerStateDir": CONTAINER_STATE_DIR,
         "hostWorkspaceDir": host_workspace_dir,
         "containerWorkspaceDir": container_workspace_dir,
+        "containerStateAliases": state_aliases or [CONTAINER_STATE_DIR],
+        "containerWorkspaceAliases": workspace_aliases or [container_workspace_dir],
+        "bindMounts": mappings,
     }
 
 
@@ -189,35 +284,28 @@ def find_docker_session_host_path_refs(profile: str, summary: dict | None = None
     if not sessions_dir.exists():
         return []
     translation = build_path_translation(profile, summary, runtime)
-    unsafe_patterns: list[re.Pattern[str]] = []
-    path_fields = (
-        "workspaceDir",
-        "cwd",
-        "path",
-        "filePath",
-        "baseDir",
-        "rootDir",
-        "configPath",
-        "sessionFile",
+    mappings = translation.get("bindMounts") or []
+    translated_roots = sorted(
+        {
+            item["hostPath"]
+            for item in mappings
+            if item.get("hostPath") != item.get("containerPath")
+            and isinstance(item.get("hostPath"), str)
+        },
+        key=len,
+        reverse=True,
     )
-    for host_key, container_key in (
-        ("hostStateDir", "containerStateDir"),
-        ("hostWorkspaceDir", "containerWorkspaceDir"),
-    ):
-        host_path = translation.get(host_key)
-        container_path = translation.get(container_key)
-        if (
-            isinstance(host_path, str)
-            and host_path
-            and isinstance(container_path, str)
-            and container_path
-            and host_path != container_path
-        ):
-            for field in path_fields:
-                unsafe_patterns.append(
-                    re.compile(rf'"{field}"\s*:\s*"{re.escape(host_path)}(?:/|")')
-                )
-    if not unsafe_patterns:
+    preserved_roots = sorted(
+        {
+            item["hostPath"]
+            for item in mappings
+            if item.get("hostPath") == item.get("containerPath")
+            and isinstance(item.get("hostPath"), str)
+        },
+        key=len,
+        reverse=True,
+    )
+    if not translated_roots:
         return []
     hits: list[str] = []
     for path in sorted(sessions_dir.glob("*")):
@@ -229,7 +317,21 @@ def find_docker_session_host_path_refs(profile: str, summary: dict | None = None
             data = path.read_text(encoding="utf-8")
         except Exception:
             continue
-        if any(pattern.search(data) for pattern in unsafe_patterns):
+        path_values: list[str] = []
+        for match in SESSION_PATH_VALUE_PATTERN.finditer(data):
+            raw_path = match.group("path")
+            try:
+                value = json.loads(f'"{raw_path}"')
+            except json.JSONDecodeError:
+                value = raw_path
+            normalized = normalize_absolute_path(value if isinstance(value, str) else None)
+            if normalized:
+                path_values.append(normalized)
+        if any(
+            any(path_is_within_root(value, root) for root in translated_roots)
+            and not any(path_is_within_root(value, root) for root in preserved_roots)
+            for value in path_values
+        ):
             hits.append(str(path))
     return hits
 

@@ -1,3 +1,4 @@
+import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -5,6 +6,7 @@ from unittest.mock import patch
 
 from manager_tt_backend.actions import create_instance, delete_instance
 from manager_tt_backend.docker_managed import create_instance_via_docker_manager
+from manager_tt_backend.instances import list_instances
 
 
 class CreateInstanceActionTests(unittest.TestCase):
@@ -111,39 +113,201 @@ class DockerCreateRollbackTests(unittest.TestCase):
             self.assertTrue(any(cmd.startswith("systemctl --user disable --now") for cmd in shell_calls))
 
 
+class DockerCreatePortGuardTests(unittest.TestCase):
+    def test_create_rejects_host_occupied_port_before_writing_artifacts(self) -> None:
+        with TemporaryDirectory() as tmp:
+            missing_config = Path(tmp) / "missing-openclaw.json"
+
+            with (
+                patch("manager_tt_backend.docker_managed.config_path_for_profile", return_value=missing_config),
+                patch(
+                    "manager_tt_backend.docker_managed.list_port_owners",
+                    return_value=[
+                        {
+                            "localAddress": "127.0.0.1:21789",
+                            "process": 'users:(("docker-proxy",pid=4242,fd=7))',
+                        }
+                    ],
+                ),
+                patch("manager_tt_backend.docker_managed.resolve_openclaw_image") as resolve_image,
+                patch("manager_tt_backend.docker_managed.prepare_profile_config") as prepare_profile_config,
+            ):
+                with self.assertRaisesRegex(ValueError, "21789"):
+                    create_instance_via_docker_manager({"profile": "designer", "port": 21789})
+
+        resolve_image.assert_not_called()
+        prepare_profile_config.assert_not_called()
+
+
 class DeleteInstanceTests(unittest.TestCase):
-    @patch("manager_tt_backend.actions.run_shell")
-    @patch("manager_tt_backend.actions.bridge_token_path_for_profile")
-    @patch("manager_tt_backend.actions.docker_control_script_path_for_profile")
-    @patch("manager_tt_backend.actions.docker_compose_dir_for_profile")
-    @patch("manager_tt_backend.actions.read_runtime_meta")
-    @patch("manager_tt_backend.actions.state_dir_for_profile")
-    @patch("manager_tt_backend.actions.service_name_for_profile")
-    def test_delete_removes_docker_artifacts_when_state_dir_is_removed(
-        self,
-        service_name_for_profile,
-        state_dir_for_profile,
-        read_runtime_meta,
-        docker_compose_dir_for_profile,
-        docker_control_script_path_for_profile,
-        bridge_token_path_for_profile,
-        run_shell,
-    ) -> None:
-        service_name_for_profile.return_value = "openclaw-gateway-designer.service"
-        state_dir_for_profile.return_value = Path("/tmp/.openclaw-designer")
-        read_runtime_meta.return_value = {"runtimeMode": "container"}
-        docker_compose_dir_for_profile.return_value = Path("/tmp/.openclaw-designer-docker")
-        docker_control_script_path_for_profile.return_value = Path("/tmp/openclaw-designer-docker-service")
-        bridge_token_path_for_profile.return_value = Path("/tmp/designer.token")
-        run_shell.return_value = type("Result", (), {"stdout": "", "stderr": "", "returncode": 0})()
+    def test_delete_removes_docker_artifacts_when_state_dir_is_removed(self) -> None:
+        with TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            home.mkdir()
+            openclaw_home = home / ".openclaw"
+            openclaw_home.mkdir()
+            state_dir = home / ".openclaw-designer"
+            state_dir.mkdir()
+            (state_dir / "openclaw.json").write_text('{"gateway":{"port":19789}}\n', encoding="utf-8")
 
-        delete_instance({"profile": "designer", "removeStateDir": True})
+            compose_dir = home / ".openclaw-designer-docker"
+            compose_dir.mkdir()
+            control_script_path = home / ".local" / "bin" / "openclaw-designer-docker-service"
+            control_script_path.parent.mkdir(parents=True, exist_ok=True)
+            control_script_path.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+            token_path = home / ".config" / "manager-tt" / "openclaw-bridge" / "designer.token"
+            token_path.parent.mkdir(parents=True, exist_ok=True)
+            token_path.write_text("token\n", encoding="utf-8")
 
-        command = run_shell.call_args.args[0]
-        self.assertIn("rm -rf /tmp/.openclaw-designer", command)
-        self.assertIn("rm -rf /tmp/.openclaw-designer-docker", command)
-        self.assertIn("rm -f /tmp/openclaw-designer-docker-service", command)
-        self.assertIn("rm -f /tmp/designer.token", command)
+            systemd_dir = home / ".config" / "systemd" / "user"
+            systemd_dir.mkdir(parents=True)
+            service_name = "openclaw-gateway-designer.service"
+            service_path = systemd_dir / service_name
+            override_path = systemd_dir / f"{service_name}.d" / "override.conf"
+            service_path.write_text("[Unit]\nDescription=test\n", encoding="utf-8")
+            override_path.parent.mkdir(parents=True, exist_ok=True)
+            override_path.write_text("[Service]\nExecStart=test\n", encoding="utf-8")
+
+            shell_calls = []
+
+            def fake_run_shell(cmd, timeout_ms=15000, cwd=None):
+                shell_calls.append(cmd)
+                if cmd == "docker container inspect openclaw-gateway-designer":
+                    return type("Result", (), {"stdout": "[]", "stderr": "", "returncode": 0})()
+                if cmd == "docker rm -f openclaw-gateway-designer":
+                    return type("Result", (), {"stdout": "openclaw-gateway-designer\n", "stderr": "", "returncode": 0})()
+                if cmd == "docker network ls --filter label=com.docker.compose.project=openclaw-designer --format '{{.Name}}'":
+                    return type("Result", (), {"stdout": "openclaw-designer_default\n", "stderr": "", "returncode": 0})()
+                if cmd == "docker network inspect openclaw-designer_default":
+                    return type("Result", (), {"stdout": "[]", "stderr": "", "returncode": 0})()
+                if cmd == "docker network rm openclaw-designer_default":
+                    return type("Result", (), {"stdout": "openclaw-designer_default\n", "stderr": "", "returncode": 0})()
+                return type("Result", (), {"stdout": "", "stderr": "", "returncode": 0})()
+
+            with (
+                patch("manager_tt_backend.config.HOME", home),
+                patch("manager_tt_backend.config.OPENCLAW_HOME", openclaw_home),
+                patch("manager_tt_backend.config.OPENCLAW_SYSTEMD_DIR", systemd_dir),
+                patch("manager_tt_backend.config.OPENCLAW_BRIDGE_TOKEN_DIR", token_path.parent),
+                patch("manager_tt_backend.docker_managed.HOME", home),
+                patch("manager_tt_backend.actions.OPENCLAW_SYSTEMD_DIR", systemd_dir),
+                patch("manager_tt_backend.actions.run_shell", side_effect=fake_run_shell),
+                patch("manager_tt_backend.docker_managed.run_shell", side_effect=fake_run_shell),
+            ):
+                result = delete_instance({"profile": "designer", "removeStateDir": True})
+
+            self.assertEqual(result["returncode"], 0)
+            self.assertFalse(state_dir.exists())
+            self.assertFalse(compose_dir.exists())
+            self.assertFalse(control_script_path.exists())
+            self.assertFalse(token_path.exists())
+            self.assertFalse(service_path.exists())
+            self.assertFalse(override_path.exists())
+            self.assertEqual(result["archivedPaths"], [])
+            self.assertIn(str(state_dir), result["removedPaths"])
+            self.assertIn(str(compose_dir), result["removedPaths"])
+            self.assertIn(str(control_script_path), result["removedPaths"])
+            self.assertIn(str(token_path), result["removedPaths"])
+            self.assertIn(
+                "systemctl --user disable --now openclaw-gateway-designer.service 2>/dev/null || true",
+                shell_calls,
+            )
+            self.assertIn("docker container inspect openclaw-gateway-designer", shell_calls)
+            self.assertIn("docker rm -f openclaw-gateway-designer", shell_calls)
+            self.assertIn(
+                "docker network ls --filter label=com.docker.compose.project=openclaw-designer --format '{{.Name}}'",
+                shell_calls,
+            )
+            self.assertIn("docker network rm openclaw-designer_default", shell_calls)
+            self.assertIn("systemctl --user daemon-reload", shell_calls)
+
+    def test_delete_preserves_state_but_archives_discovery_files(self) -> None:
+        with TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            home.mkdir()
+            openclaw_home = home / ".openclaw"
+            openclaw_home.mkdir()
+            state_dir = home / ".openclaw-designer"
+            state_dir.mkdir()
+            config_path = state_dir / "openclaw.json"
+            runtime_meta_path = state_dir / ".openclaw-runtime.json"
+            bridge_tool_path = state_dir / "tools" / "openclaw_host_bridge.py"
+            bridge_tool_path.parent.mkdir(parents=True, exist_ok=True)
+            workspace_file = state_dir / "workspace" / "keep.txt"
+            workspace_file.parent.mkdir(parents=True, exist_ok=True)
+            workspace_file.write_text("keep me\n", encoding="utf-8")
+
+            config_payload = {"gateway": {"port": 19789}}
+            runtime_meta_payload = {"runtimeMode": "docker", "port": 19789}
+            config_path.write_text(json.dumps(config_payload, ensure_ascii=False) + "\n", encoding="utf-8")
+            runtime_meta_path.write_text(json.dumps(runtime_meta_payload, ensure_ascii=False) + "\n", encoding="utf-8")
+            bridge_tool_path.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+
+            compose_dir = home / ".openclaw-designer-docker"
+            compose_dir.mkdir()
+            (compose_dir / "docker-compose.yml").write_text("services:\n", encoding="utf-8")
+            control_script_path = home / ".local" / "bin" / "openclaw-designer-docker-service"
+            control_script_path.parent.mkdir(parents=True, exist_ok=True)
+            control_script_path.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+            token_path = home / ".config" / "manager-tt" / "openclaw-bridge" / "designer.token"
+            token_path.parent.mkdir(parents=True, exist_ok=True)
+            token_path.write_text("token\n", encoding="utf-8")
+
+            systemd_dir = home / ".config" / "systemd" / "user"
+            systemd_dir.mkdir(parents=True)
+            service_name = "openclaw-gateway-designer.service"
+            service_path = systemd_dir / service_name
+            override_path = systemd_dir / f"{service_name}.d" / "override.conf"
+            service_path.write_text("[Unit]\nDescription=test\n", encoding="utf-8")
+            override_path.parent.mkdir(parents=True, exist_ok=True)
+            override_path.write_text("[Service]\nExecStart=test\n", encoding="utf-8")
+
+            shell_calls = []
+
+            def fake_run_shell(cmd, timeout_ms=15000, cwd=None):
+                shell_calls.append(cmd)
+                return type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+            with (
+                patch("manager_tt_backend.config.HOME", home),
+                patch("manager_tt_backend.config.OPENCLAW_HOME", openclaw_home),
+                patch("manager_tt_backend.config.OPENCLAW_SYSTEMD_DIR", systemd_dir),
+                patch("manager_tt_backend.config.OPENCLAW_BRIDGE_TOKEN_DIR", token_path.parent),
+                patch("manager_tt_backend.docker_managed.HOME", home),
+                patch("manager_tt_backend.actions.OPENCLAW_SYSTEMD_DIR", systemd_dir),
+                patch("manager_tt_backend.actions.run_shell", side_effect=fake_run_shell),
+                patch("manager_tt_backend.docker_managed.run_shell", side_effect=fake_run_shell),
+            ):
+                result = delete_instance({"profile": "designer", "removeStateDir": False})
+                items = list_instances()
+
+            self.assertEqual(result["returncode"], 0)
+            self.assertEqual(items, [])
+            self.assertFalse(config_path.exists())
+            self.assertFalse(runtime_meta_path.exists())
+            self.assertTrue(workspace_file.exists())
+            self.assertFalse(bridge_tool_path.exists())
+            self.assertFalse(compose_dir.exists())
+            self.assertFalse(control_script_path.exists())
+            self.assertFalse(token_path.exists())
+            self.assertFalse(service_path.exists())
+            self.assertFalse(override_path.exists())
+
+            archived_configs = sorted(state_dir.glob("openclaw.json.deleted.*.manager-tt"))
+            archived_runtime_meta = sorted(state_dir.glob(".openclaw-runtime.json.deleted.*.manager-tt"))
+            self.assertEqual(len(archived_configs), 1)
+            self.assertEqual(len(archived_runtime_meta), 1)
+            self.assertEqual(json.loads(archived_configs[0].read_text(encoding="utf-8")), config_payload)
+            self.assertEqual(json.loads(archived_runtime_meta[0].read_text(encoding="utf-8")), runtime_meta_payload)
+            self.assertEqual(result["archivedPaths"], [str(archived_configs[0]), str(archived_runtime_meta[0])])
+            self.assertIn(
+                "systemctl --user disable --now openclaw-gateway-designer.service 2>/dev/null || true",
+                shell_calls,
+            )
+            self.assertTrue(
+                any(cmd.startswith("docker compose --project-name openclaw-designer -f ") for cmd in shell_calls)
+            )
+            self.assertIn("systemctl --user daemon-reload", shell_calls)
 
 
 if __name__ == "__main__":
