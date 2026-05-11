@@ -1,0 +1,1285 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpenClaw Manager</title>
+<style>
+:root {
+  --bg: #1a1b1e;
+  --surface: #25262b;
+  --surface-hover: #2c2e33;
+  --surface-raised: #2f3035;
+  --border: #373a40;
+  --border-subtle: #2e3035;
+  --text: #c1c2c5;
+  --text-dim: #909296;
+  --text-bright: #e8e9eb;
+  --primary: #4c6ef5;
+  --primary-hover: #3b5bdb;
+  --green: #40c057;
+  --green-bg: rgba(64, 192, 87, 0.1);
+  --red: #fa5252;
+  --red-bg: rgba(250, 82, 82, 0.1);
+  --yellow: #fab005;
+  --yellow-bg: rgba(250, 176, 5, 0.1);
+  --mono: "SFMono-Regular", "JetBrains Mono", "Fira Code", monospace;
+  --radius: 10px;
+  --radius-sm: 6px;
+  --radius-lg: 14px;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+}
+
+.shell {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* ===== Sidebar ===== */
+.sidebar {
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.sidebar-head {
+  padding: 18px 16px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sidebar-head h1 {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text-bright);
+  letter-spacing: -0.02em;
+}
+
+.sidebar-stats {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.stat-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--bg);
+  border: 1px solid var(--border-subtle);
+}
+
+.stat-chip .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.dot-green { background: var(--green); }
+.dot-red { background: var(--red); }
+.dot-yellow { background: var(--yellow); }
+
+.sidebar-actions {
+  display: flex;
+  gap: 8px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.btn {
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 7px 14px;
+  transition: background 0.12s, opacity 0.12s;
+}
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn:active:not(:disabled) { transform: scale(0.97); }
+
+.btn-primary { background: var(--primary); color: #fff; }
+.btn-primary:hover:not(:disabled) { background: var(--primary-hover); }
+.btn-ghost { background: transparent; color: var(--text-dim); border: 1px solid var(--border); }
+.btn-ghost:hover:not(:disabled) { color: var(--text); border-color: var(--text-dim); }
+.btn-danger { background: var(--red-bg); color: var(--red); border: 1px solid rgba(250,82,82,0.2); }
+.btn-danger:hover:not(:disabled) { background: rgba(250,82,82,0.18); }
+
+.sidebar-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 0;
+}
+
+.instance-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.instance-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  cursor: pointer;
+  transition: background 0.1s;
+  border-left: 3px solid transparent;
+}
+.instance-item:hover { background: var(--surface-hover); }
+.instance-item.active {
+  background: var(--surface-hover);
+  border-left-color: var(--primary);
+}
+
+.instance-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.instance-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.instance-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-bright);
+}
+
+.instance-meta {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  margin-top: 2px;
+}
+
+.instance-port {
+  font-size: 11px;
+  font-family: var(--mono);
+  color: var(--primary);
+  background: rgba(76,110,245,0.12);
+  padding: 2px 7px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.sidebar-foot {
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+}
+
+.create-row {
+  display: flex;
+  gap: 6px;
+}
+
+.create-mode-row {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.create-mode-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.create-mode-option.disabled {
+  opacity: 0.55;
+}
+
+.create-mode-hint {
+  min-height: 18px;
+  margin: 6px 0 10px;
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.create-row input {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  padding: 7px 10px;
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+}
+.create-row input::placeholder { color: var(--text-dim); }
+.create-row input:focus { border-color: var(--primary); }
+
+/* ===== Content ===== */
+.content {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.content-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 24px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  flex-shrink: 0;
+}
+
+.content-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.content-title h2 {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-bright);
+  letter-spacing: -0.02em;
+}
+
+.content-title .status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.badge-running { background: var(--green-bg); color: var(--green); }
+.badge-stopped { background: var(--red-bg); color: var(--red); }
+.badge-unknown { background: rgba(144,146,150,0.1); color: var(--text-dim); }
+
+.content-actions {
+  display: flex;
+  gap: 6px;
+}
+
+/* ===== Tabs ===== */
+.tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  padding: 0 24px;
+  flex-shrink: 0;
+}
+
+.tab {
+  padding: 10px 18px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-dim);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: color 0.12s, border-color 0.12s;
+  user-select: none;
+}
+.tab:hover { color: var(--text); }
+.tab.active {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+  font-weight: 600;
+}
+
+.tab-panel {
+  display: none;
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 24px;
+}
+.tab-panel.active { display: block; }
+
+/* ===== Tab: Overview ===== */
+.overview-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+}
+
+.card-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-bright);
+  margin-bottom: 12px;
+}
+
+.check-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+
+.check-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.check-icon.ok { background: var(--green-bg); color: var(--green); }
+.check-icon.fail { background: var(--red-bg); color: var(--red); }
+
+.check-name {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.check-msg {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-left: auto;
+  font-family: var(--mono);
+}
+
+.issue-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.issue-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+
+.issue-level {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+.issue-level.error { background: var(--red-bg); color: var(--red); }
+.issue-level.warn { background: var(--yellow-bg); color: var(--yellow); }
+
+.issue-msg {
+  font-size: 12px;
+  color: var(--text);
+  flex: 1;
+}
+
+/* ===== Tab: Detail ===== */
+.kv-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.kv {
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+}
+
+.kv-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--text-dim);
+  margin-bottom: 4px;
+}
+
+.kv-value {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-bright);
+  word-break: break-all;
+  font-family: var(--mono);
+}
+
+.code-block {
+  background: #0d0d0f;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 14px;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 300px;
+  overflow: auto;
+}
+
+.section-gap { margin-top: 18px; }
+
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.section-head h3 {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-bright);
+}
+
+.section-head .hint {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+/* ===== Tab: Logs ===== */
+.logs-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.logs-toolbar .meta {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.logs-toolbar .actions {
+  display: flex;
+  gap: 6px;
+}
+
+/* ===== Tab: Config ===== */
+.config-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.config-toolbar .meta {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.config-toolbar .actions {
+  display: flex;
+  gap: 6px;
+}
+
+textarea.config-editor {
+  width: 100%;
+  min-height: 480px;
+  resize: vertical;
+  background: #0d0d0f;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  color: var(--text);
+  padding: 16px;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.65;
+  outline: none;
+}
+textarea.config-editor:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(76,110,245,0.1);
+}
+
+/* ===== Tab: Ops ===== */
+.ops-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ops-item {
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+}
+
+.ops-item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.ops-item-head strong {
+  font-size: 13px;
+  color: var(--text-bright);
+}
+
+.ops-item-head .note {
+  font-size: 11px;
+  color: var(--text-dim);
+  max-width: 300px;
+  text-align: right;
+}
+
+.ops-cmd {
+  background: #0d0d0f;
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text);
+  word-break: break-all;
+}
+
+.caution-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.caution-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--yellow-bg);
+  border: 1px solid rgba(250,176,5,0.15);
+  font-size: 12px;
+  color: #e8a817;
+  line-height: 1.5;
+}
+
+.caution-icon {
+  flex-shrink: 0;
+  font-size: 13px;
+}
+
+/* ===== Empty state ===== */
+.empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 20px;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+/* ===== Toast ===== */
+.toast {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  background: var(--surface-raised);
+  color: var(--text-bright);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 18px;
+  font-size: 13px;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.4);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(8px);
+  transition: opacity 0.18s, transform 0.18s;
+  z-index: 100;
+  max-width: 360px;
+}
+.toast.show { opacity: 1; transform: translateY(0); }
+.toast.error { border-color: rgba(250,82,82,0.3); }
+.toast.warn { border-color: rgba(250,176,5,0.3); }
+
+/* ===== Responsive ===== */
+@media (max-width: 900px) {
+  .shell {
+    grid-template-columns: 1fr;
+    height: auto;
+    min-height: 100vh;
+  }
+  .sidebar {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    max-height: 40vh;
+  }
+  .content { min-height: 60vh; }
+  .overview-grid, .kv-grid { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<div class="shell">
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="sidebar-head">
+      <h1>OpenClaw</h1>
+      <div class="sidebar-stats" id="statsBar">
+        <div class="stat-chip"><span class="dot dot-green"></span> <span id="statRunning">0</span> 运行</div>
+        <div class="stat-chip"><span class="dot dot-red"></span> <span id="statIssues">0</span> 告警</div>
+      </div>
+    </div>
+
+    <div class="sidebar-actions">
+      <button class="btn btn-primary" onclick="refreshAll()">刷新</button>
+      <button class="btn btn-ghost" onclick="repairAll()">修复</button>
+      <button class="btn btn-ghost" onclick="reloadDaemon()">reload</button>
+    </div>
+
+    <div class="sidebar-body">
+      <div class="instance-list" id="instanceList">
+        <div class="empty">加载中...</div>
+      </div>
+    </div>
+
+    <div class="sidebar-foot">
+      <div class="create-mode-row">
+        <label class="create-mode-option" id="createModeDockerLabel">
+          <input type="radio" name="createRuntimeMode" id="createModeDocker" value="docker" checked>
+          <span>Docker 实例</span>
+        </label>
+        <label class="create-mode-option" id="createModeHostLabel">
+          <input type="radio" name="createRuntimeMode" id="createModeHost" value="host">
+          <span>本机实例</span>
+        </label>
+      </div>
+      <div class="create-mode-hint" id="createModeHint">默认创建 Docker 实例</div>
+      <div class="create-row">
+        <input id="createProfile" placeholder="profile 名">
+        <input id="createPort" placeholder="端口" style="width:72px">
+        <button class="btn btn-primary" onclick="createInstance()">+</button>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Content -->
+  <div class="content">
+    <div class="content-head" id="contentHead">
+      <div class="content-title">
+        <h2 id="contentName">选择实例</h2>
+        <span class="status-badge badge-unknown" id="contentBadge">-</span>
+      </div>
+      <div class="content-actions" id="contentActions"></div>
+    </div>
+
+    <div class="tabs" id="tabsBar">
+      <div class="tab active" data-tab="overview" onclick="switchTab('overview')">概览</div>
+      <div class="tab" data-tab="detail" onclick="switchTab('detail')">详情</div>
+      <div class="tab" data-tab="logs" onclick="switchTab('logs')">日志</div>
+      <div class="tab" data-tab="config" onclick="switchTab('config')">配置</div>
+      <div class="tab" data-tab="ops" onclick="switchTab('ops')">运维</div>
+    </div>
+
+    <!-- Tab: Overview -->
+    <div class="tab-panel active" id="panel-overview">
+      <div class="overview-grid">
+        <div class="card">
+          <div class="card-title">健康检查</div>
+          <div class="check-list" id="checkList">
+            <div class="empty">等待加载</div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-title">告警</div>
+          <div class="issue-list" id="issueList">
+            <div class="empty">无告警</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab: Detail -->
+    <div class="tab-panel" id="panel-detail">
+      <div class="section-head">
+        <h3>关键路径</h3>
+      </div>
+      <div class="kv-grid" id="kvGrid">
+        <div class="empty">等待加载</div>
+      </div>
+
+      <div class="section-gap">
+        <div class="section-head">
+          <h3>Service 文件</h3>
+        </div>
+        <div style="margin-bottom:10px">
+          <div class="kv-label" style="margin-bottom:4px">主 service</div>
+          <div class="code-block" id="serviceTextBox">-</div>
+        </div>
+        <div>
+          <div class="kv-label" style="margin-bottom:4px">override.conf</div>
+          <div class="code-block" id="overrideTextBox">-</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab: Logs -->
+    <div class="tab-panel" id="panel-logs">
+      <div class="logs-toolbar">
+        <span class="meta" id="logsMeta">等待加载</span>
+        <div class="actions">
+          <button class="btn btn-ghost" onclick="loadLogs(120)">120 行</button>
+          <button class="btn btn-ghost" onclick="loadLogs(300)">300 行</button>
+        </div>
+      </div>
+      <div class="code-block" id="logsBox" style="min-height:200px">-</div>
+    </div>
+
+    <!-- Tab: Config -->
+    <div class="tab-panel" id="panel-config">
+      <div class="config-toolbar">
+        <span class="meta" id="configMeta">等待加载</span>
+        <div class="actions">
+          <button class="btn btn-ghost" onclick="reloadConfig()">重新读取</button>
+          <button class="btn btn-primary" onclick="saveConfig(false)">保存</button>
+          <button class="btn btn-primary" onclick="saveConfig(true)">保存并重启</button>
+        </div>
+      </div>
+      <textarea class="config-editor" id="configEditor" spellcheck="false"></textarea>
+    </div>
+
+    <!-- Tab: Ops -->
+    <div class="tab-panel" id="panel-ops">
+      <div class="ops-list" id="opsList">
+        <div class="empty">等待加载</div>
+      </div>
+      <div class="caution-list" id="opsCautions"></div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const API = 'http://127.0.0.1:58080';
+
+const app = {
+  summary: null,
+  diagnostics: null,
+  selectedProfile: null,
+  detailByProfile: {},
+  configTextByProfile: {},
+  activeTab: 'overview',
+};
+
+// ===== Toast =====
+function showToast(text, kind = 'info') {
+  const el = document.getElementById('toast');
+  el.textContent = text;
+  el.className = 'toast show' + (kind === 'error' ? ' error' : kind === 'warn' ? ' warn' : '');
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(() => el.className = 'toast', 2600);
+}
+
+// ===== API helpers =====
+async function apiGet(path) {
+  const resp = await fetch(`${API}${path}`);
+  const data = await resp.json();
+  if (!resp.ok) throw new Error(data.error || `GET ${path} failed`);
+  return data;
+}
+
+async function apiPost(path, payload) {
+  const resp = await fetch(`${API}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const data = await resp.json();
+  if (!resp.ok) throw new Error(data.error || `POST ${path} failed`);
+  return data;
+}
+
+function esc(text) {
+  return String(text ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ===== Tab switching =====
+function switchTab(tab) {
+  app.activeTab = tab;
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === `panel-${tab}`));
+}
+
+// ===== Render: Sidebar =====
+function renderSidebar() {
+  const instances = app.summary?.instances || [];
+  const diagnostics = app.diagnostics || { issues: [] };
+
+  const running = instances.filter(i => i.activeState === 'active').length;
+  document.getElementById('statRunning').textContent = running;
+  document.getElementById('statIssues').textContent = diagnostics.issues.length;
+
+  const list = document.getElementById('instanceList');
+  if (!instances.length) {
+    list.innerHTML = '<div class="empty">无实例</div>';
+    return;
+  }
+
+  list.innerHTML = instances.map(item => {
+    const active = item.profile === app.selectedProfile ? 'active' : '';
+    const dotColor = item.activeState === 'active' ? 'var(--green)' :
+                     item.activeState === 'failed' ? 'var(--red)' : 'var(--text-dim)';
+    return `
+      <div class="instance-item ${active}" onclick="selectProfile('${esc(item.profile)}')">
+        <span class="instance-dot" style="background:${dotColor}"></span>
+        <div class="instance-info">
+          <div class="instance-name">${esc(item.profile)}</div>
+          <div class="instance-meta">${esc(item.activeState || '?')} / ${esc(item.subState || '?')}</div>
+        </div>
+        ${item.port ? `<span class="instance-port">:${item.port}</span>` : ''}
+      </div>
+    `;
+  }).join('');
+}
+
+// ===== Render: Content Head =====
+function renderContentHead() {
+  const detail = currentDetail();
+  const name = document.getElementById('contentName');
+  const badge = document.getElementById('contentBadge');
+  const actions = document.getElementById('contentActions');
+
+  if (!detail) {
+    name.textContent = '选择实例';
+    badge.className = 'status-badge badge-unknown';
+    badge.textContent = '-';
+    actions.innerHTML = '';
+    return;
+  }
+
+  const s = detail.summary;
+  const r = detail.runtime;
+  name.textContent = s.profile;
+
+  const cls = r.activeState === 'active' ? 'badge-running' :
+              r.activeState === 'inactive' || r.activeState === 'failed' ? 'badge-stopped' : 'badge-unknown';
+  badge.className = 'status-badge ' + cls;
+  badge.textContent = r.activeState === 'active' ? '运行中' :
+                      r.activeState === 'failed' ? '失败' :
+                      r.activeState === 'inactive' ? '已停止' : r.activeState;
+
+  actions.innerHTML = `
+    <button class="btn btn-primary" onclick="doAction('start')">启动</button>
+    <button class="btn btn-ghost" onclick="doAction('restart')">重启</button>
+    <button class="btn btn-ghost" onclick="doAction('stop')">停止</button>
+    <button class="btn btn-ghost" onclick="doAction('ensure')">ensure</button>
+    ${r.runtimeMode === 'docker' ? '<button class="btn btn-ghost" onclick="doctorRepair()">doctor</button>' : ''}
+    ${s.profile !== 'default' ? '<button class="btn btn-danger" onclick="deleteInstance(false)">删除</button>' : ''}
+  `;
+}
+
+// ===== Render: Overview =====
+function renderOverview() {
+  const detail = currentDetail();
+  const issues = currentIssues();
+
+  const checkList = document.getElementById('checkList');
+  if (!detail) {
+    checkList.innerHTML = '<div class="empty">等待加载</div>';
+  } else {
+    checkList.innerHTML = detail.checks.map(c => `
+      <div class="check-row">
+        <span class="check-icon ${c.ok ? 'ok' : 'fail'}">${c.ok ? '&#10003;' : '&#10007;'}</span>
+        <span class="check-name">${esc(c.name)}</span>
+        <span class="check-msg">${esc(c.message)}</span>
+      </div>
+    `).join('');
+  }
+
+  const issueList = document.getElementById('issueList');
+  if (!issues.length) {
+    issueList.innerHTML = '<div class="empty">无告警</div>';
+  } else {
+    issueList.innerHTML = issues.map(i => `
+      <div class="issue-row">
+        <span class="issue-level ${i.level || 'warn'}">${esc(i.level || 'warn')}</span>
+        <span class="issue-msg">${esc(i.message || '')}</span>
+      </div>
+    `).join('');
+  }
+}
+
+// ===== Render: Detail =====
+function renderDetail() {
+  const detail = currentDetail();
+  const kvGrid = document.getElementById('kvGrid');
+  const serviceBox = document.getElementById('serviceTextBox');
+  const overrideBox = document.getElementById('overrideTextBox');
+
+  if (!detail) {
+    kvGrid.innerHTML = '<div class="empty">等待加载</div>';
+    serviceBox.textContent = '-';
+    overrideBox.textContent = '-';
+    return;
+  }
+
+  const s = detail.summary;
+  const r = detail.runtime;
+  const rows = [
+    ['配置文件', s.configPath],
+    ['State 目录', s.stateDir],
+    ['Workspace', s.workspace || '-'],
+    ['运行模式', r.runtimeMode || 'systemd'],
+    ['Service', r.serviceName],
+    ['MainPID', r.mainPid || 0],
+    ['主模型', s.primaryModel || '-'],
+    ['Tool Profile', s.toolProfile || '-'],
+    ['Bind', s.bind || '-'],
+    ['Feishu', s.feishu?.enabled ? 'enabled' : 'disabled'],
+    ['版本', s.metaVersion || '-'],
+    ['端口监听', (r.portOwners || []).length ? `${r.portOwners.length} socket` : '无'],
+  ];
+
+  if (r.runtimeMode === 'docker') {
+    rows.push(['容器', r.dockerRuntime?.containerName || '-']);
+    rows.push(['镜像', r.dockerRuntime?.image || '-']);
+    rows.push(['容器状态', r.dockerRuntime?.status || '-']);
+  }
+
+  kvGrid.innerHTML = rows.map(([label, value]) => `
+    <div class="kv">
+      <div class="kv-label">${esc(label)}</div>
+      <div class="kv-value">${esc(value)}</div>
+    </div>
+  `).join('');
+
+  serviceBox.textContent = detail.serviceFiles?.serviceText || '缺失';
+  overrideBox.textContent = detail.serviceFiles?.overrideText || '缺失';
+}
+
+// ===== Render: Logs =====
+function renderLogs(logText, lines) {
+  const detail = currentDetail();
+  document.getElementById('logsMeta').textContent =
+    detail ? `${detail.runtime.serviceName}${lines ? ` · ${lines} 行` : ''}` : '等待加载';
+  if (logText !== null && logText !== undefined) {
+    document.getElementById('logsBox').textContent = logText || '无日志';
+  }
+}
+
+// ===== Render: Config =====
+function renderConfig() {
+  const detail = currentDetail();
+  const meta = document.getElementById('configMeta');
+  const editor = document.getElementById('configEditor');
+  if (!detail) {
+    meta.textContent = '-';
+    editor.value = '';
+    return;
+  }
+  meta.textContent = detail.paths.configPath;
+  editor.value = app.configTextByProfile[detail.summary.profile] || JSON.stringify(detail.config, null, 2);
+}
+
+// ===== Render: Ops =====
+function renderOps() {
+  const detail = currentDetail();
+  const opsList = document.getElementById('opsList');
+  const cautions = document.getElementById('opsCautions');
+
+  if (!detail) {
+    opsList.innerHTML = '<div class="empty">等待加载</div>';
+    cautions.innerHTML = '';
+    return;
+  }
+
+  const commands = detail.manual?.commands || [];
+  const cautionItems = detail.manual?.cautions || [];
+
+  opsList.innerHTML = commands.length ? commands.map((item, i) => `
+    <div class="ops-item">
+      <div class="ops-item-head">
+        <strong>${esc(item.label || `命令 ${i+1}`)}</strong>
+        <button class="btn btn-ghost" onclick="copyCmd(${i})">复制</button>
+      </div>
+      <div class="ops-cmd">${esc(item.command || '')}</div>
+    </div>
+  `).join('') : '<div class="empty">无运维指令</div>';
+
+  cautions.innerHTML = cautionItems.map(text => `
+    <div class="caution-item">
+      <span class="caution-icon">!</span>
+      <span>${esc(text)}</span>
+    </div>
+  `).join('');
+}
+
+// ===== Helpers =====
+function currentDetail() {
+  return app.detailByProfile[app.selectedProfile] || null;
+}
+
+function currentIssues() {
+  const issues = app.diagnostics?.issues || [];
+  return issues.filter(i => {
+    if (i.profile === app.selectedProfile) return true;
+    if (Array.isArray(i.profiles) && i.profiles.includes(app.selectedProfile)) return true;
+    return !i.profile && !i.profiles && !app.selectedProfile;
+  });
+}
+
+function renderAll() {
+  renderSidebar();
+  renderCreateModeState();
+  renderContentHead();
+  renderOverview();
+  renderDetail();
+  renderLogs(null, null);
+  renderConfig();
+  renderOps();
+}
+
+// ===== Actions =====
+async function refreshAll() {
+  try {
+    const [summary, diagnostics] = await Promise.all([
+      apiGet('/api/openclaw/summary'),
+      apiGet('/api/openclaw/diagnostics'),
+    ]);
+    app.summary = summary;
+    app.diagnostics = diagnostics;
+    renderCreateModeState();
+
+    const profiles = summary.instances.map(i => i.profile);
+    if (!app.selectedProfile || !profiles.includes(app.selectedProfile)) {
+      app.selectedProfile = profiles[0] || null;
+    }
+
+    renderSidebar();
+    if (app.selectedProfile) {
+      await selectProfile(app.selectedProfile, true);
+    } else {
+      renderContentHead();
+      renderOverview();
+      renderDetail();
+      renderConfig();
+      renderOps();
+    }
+    showToast('已刷新');
+  } catch (e) {
+    showToast(`刷新失败: ${e.message}`, 'error');
+  }
+}
+
+function hostManagedCreateProfiles() {
+  return (app.summary?.instances || [])
+    .filter(item => item.runtimeMode !== 'docker')
+    .map(item => item.profile || '?');
+}
+
+function renderCreateModeState() {
+  const dockerInput = document.getElementById('createModeDocker');
+  const hostInput = document.getElementById('createModeHost');
+  const hostLabel = document.getElementById('createModeHostLabel');
+  const hint = document.getElementById('createModeHint');
+  if (!dockerInput || !hostInput || !hostLabel || !hint) return;
+
+  const profiles = hostManagedCreateProfiles();
+  const hostDisabled = profiles.length > 0;
+  hostInput.disabled = hostDisabled;
+  hostLabel.classList.toggle('disabled', hostDisabled);
+
+  if (hostDisabled && hostInput.checked) {
+    dockerInput.checked = true;
+  }
+
+  hint.textContent = hostDisabled
+    ? `已存在本机实例：${profiles.join(', ')}；本机实例只能有一个`
+    : '默认创建 Docker 实例';
+}
+
+function selectedCreateMode() {
+  return document.querySelector('input[name="createRuntimeMode"]:checked')?.value || 'docker';
+}
+
+async function selectProfile(profile, silent = false) {
+  app.selectedProfile = profile;
+  renderSidebar();
+  try {
+    const detail = await apiGet(`/api/openclaw/instance?profile=${encodeURIComponent(profile)}`);
+    app.detailByProfile[profile] = detail;
+    app.configTextByProfile[profile] = JSON.stringify(detail.config, null, 2);
+    renderContentHead();
+    renderOverview();
+    renderDetail();
+    renderConfig();
+    renderOps();
+    await loadLogs(120, true);
+    if (!silent) showToast(profile);
+  } catch (e) {
+    showToast(`加载失败: ${e.message}`, 'error');
+  }
+}
+
+async function doAction(action) {
+  if (!app.selectedProfile) return;
+  try {
+    const result = await apiPost('/api/openclaw/action', { action, profile: app.selectedProfile });
+    showToast(`${app.selectedProfile} · ${action}`);
+    app.summary = result.summary;
+    await refreshAll();
+  } catch (e) {
+    showToast(`失败: ${e.message}`, 'error');
+  }
+}
+
+async function reloadDaemon() {
+  try {
+    await apiPost('/api/openclaw/action', { action: 'daemon-reload' });
+    showToast('daemon-reload');
+    await refreshAll();
+  } catch (e) {
+    showToast(`失败: ${e.message}`, 'error');
+  }
+}
+
+async function repairAll() {
+  try {
+    const result = await apiPost('/api/openclaw/action', { action: 'repair-all' });
+    showToast(`repair-all · rc=${result.returncode}`);
+    await refreshAll();
+  } catch (e) {
+    showToast(`失败: ${e.message}`, 'error');
+  }
+}
+
+async function doctorRepair() {
+  if (!app.selectedProfile) return;
+  try {
+    const result = await apiPost('/api/openclaw/action', { action: 'doctor-repair', profile: app.selectedProfile });
+    const msg = Array.isArray(result.actions) ? result.actions.join('；') : '完成';
+    showToast(msg);
+    await refreshAll();
+  } catch (e) {
+    showToast(`失败: ${e.message}`, 'error');
+  }
+}
+
+async function createInstance() {
+  const profile = document.getElementById('createProfile').value.trim();
+  const port = document.getElementById('createPort').value.trim();
+  const runtimeMode = selectedCreateMode();
+  if (!profile) { showToast('填写 profile 名', 'warn'); return; }
+  try {
+    await apiPost('/api/openclaw/action', { action: 'create', profile, port: port || null, runtimeMode });
+    document.getElementById('createProfile').value = '';
+    document.getElementById('createPort').value = '';
+    showToast(`${profile} 已创建`);
+    await refreshAll();
+    await selectProfile(profile);
+  } catch (e) {
+    showToast(`创建失败: ${e.message}`, 'error');
+  }
+}
+
+async function deleteInstance(removeState) {
+  if (!app.selectedProfile || app.selectedProfile === 'default') { showToast('不可删除', 'warn'); return; }
+  if (!confirm(`确认删除 ${app.selectedProfile}？${removeState ? '（含数据目录）' : ''}`)) return;
+  try {
+    await apiPost('/api/openclaw/action', { action: 'delete', profile: app.selectedProfile, removeStateDir: removeState });
+    showToast(`${app.selectedProfile} 已删除`);
+    delete app.detailByProfile[app.selectedProfile];
+    delete app.configTextByProfile[app.selectedProfile];
+    app.selectedProfile = null;
+    await refreshAll();
+  } catch (e) {
+    showToast(`删除失败: ${e.message}`, 'error');
+  }
+}
+
+async function loadLogs(lines = 120, silent = false) {
+  if (!app.selectedProfile) return;
+  try {
+    const result = await apiGet(`/api/openclaw/logs?profile=${encodeURIComponent(app.selectedProfile)}&lines=${lines}`);
+    renderLogs(result.logs, lines);
+    if (!silent) showToast(`${lines} 行日志`);
+  } catch (e) {
+    showToast(`日志失败: ${e.message}`, 'error');
+  }
+}
+
+async function reloadConfig() {
+  if (!app.selectedProfile) return;
+  try {
+    const result = await apiGet(`/api/openclaw/config?profile=${encodeURIComponent(app.selectedProfile)}`);
+    app.configTextByProfile[app.selectedProfile] = JSON.stringify(result.config, null, 2);
+    renderConfig();
+    showToast('已重新读取');
+  } catch (e) {
+    showToast(`读取失败: ${e.message}`, 'error');
+  }
+}
+
+async function saveConfig(restart) {
+  if (!app.selectedProfile) return;
+  let config;
+  try { config = JSON.parse(document.getElementById('configEditor').value); }
+  catch (e) { showToast(`JSON 错误: ${e.message}`, 'error'); return; }
+  try {
+    const result = await apiPost('/api/openclaw/config', { profile: app.selectedProfile, config, restartAfterSave: restart });
+    app.configTextByProfile[app.selectedProfile] = JSON.stringify(config, null, 2);
+    showToast(`已保存${restart ? '并重启' : ''} · validate=${result.validate?.returncode}`);
+    await refreshAll();
+  } catch (e) {
+    showToast(`保存失败: ${e.message}`, 'error');
+  }
+}
+
+async function copyCmd(index) {
+  const detail = currentDetail();
+  const cmd = detail?.manual?.commands?.[index]?.command;
+  if (!cmd) { showToast('无命令', 'warn'); return; }
+  try {
+    await navigator.clipboard.writeText(cmd);
+    showToast('已复制');
+  } catch (e) {
+    showToast(`复制失败: ${e.message}`, 'error');
+  }
+}
+
+// ===== Init =====
+refreshAll();
+</script>
+</body>
+</html>
