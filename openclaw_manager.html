@@ -513,6 +513,75 @@ body {
   gap: 6px;
 }
 
+.model-module-panel {
+  margin-bottom: 16px;
+}
+
+.model-module-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.model-module-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.model-module-field label {
+  font-size: 11px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.model-module-field input,
+.model-module-field select {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+}
+
+.model-module-field input:focus,
+.model-module-field select:focus {
+  border-color: var(--primary);
+}
+
+.model-module-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+
+.model-module-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.model-module-actions .actions {
+  display: flex;
+  gap: 6px;
+}
+
+.model-module-result {
+  min-height: 140px;
+  max-height: 340px;
+}
+
 textarea.config-editor {
   width: 100%;
   min-height: 480px;
@@ -645,7 +714,7 @@ textarea.config-editor:focus {
     max-height: 40vh;
   }
   .content { min-height: 60vh; }
-  .overview-grid, .kv-grid { grid-template-columns: 1fr; }
+  .overview-grid, .kv-grid, .model-module-grid { grid-template-columns: 1fr; }
 }
 </style>
 </head>
@@ -767,6 +836,33 @@ textarea.config-editor:focus {
 
     <!-- Tab: Config -->
     <div class="tab-panel" id="panel-config">
+      <div class="card model-module-panel">
+        <div class="section-head">
+          <h3>Tencent Coding Plan</h3>
+          <span class="hint">仅改 Tencent 模型包相关区块</span>
+        </div>
+        <div class="model-module-grid">
+          <div class="model-module-field">
+            <label for="tencentApiKey">API Key</label>
+            <input id="tencentApiKey" type="password" placeholder="sk-..." oninput="updateTencentModuleDraft()">
+          </div>
+          <div class="model-module-field">
+            <label for="tencentPrimaryModel">主模型</label>
+            <select id="tencentPrimaryModel" onchange="updateTencentModuleDraft()"></select>
+          </div>
+        </div>
+        <div class="model-module-actions">
+          <label class="model-module-toggle">
+            <input id="tencentProbeToggle" type="checkbox" checked onchange="updateTencentModuleDraft()">
+            <span>附带 probe</span>
+          </label>
+          <div class="actions">
+            <button class="btn btn-ghost" onclick="previewTencentModule()">预览</button>
+            <button class="btn btn-primary" onclick="applyTencentModule()">应用并重启</button>
+          </div>
+        </div>
+        <div class="code-block model-module-result" id="tencentModuleResult">选择实例后可预览 Tencent 模型包注入结果。</div>
+      </div>
       <div class="config-toolbar">
         <span class="meta" id="configMeta">等待加载</span>
         <div class="actions">
@@ -792,6 +888,16 @@ textarea.config-editor:focus {
 
 <script>
 const API = 'http://127.0.0.1:58080';
+const TENCENT_PRIMARY_MODELS = [
+  'tencent-coding-plan/tc-code-latest',
+  'tencent-coding-plan/hunyuan-2.0-instruct',
+  'tencent-coding-plan/hunyuan-2.0-thinking',
+  'tencent-coding-plan/hunyuan-t1',
+  'tencent-coding-plan/hunyuan-turbos',
+  'tencent-coding-plan/minimax-m2.5',
+  'tencent-coding-plan/kimi-k2.5',
+  'tencent-coding-plan/glm-5',
+];
 
 const app = {
   summary: null,
@@ -799,6 +905,8 @@ const app = {
   selectedProfile: null,
   detailByProfile: {},
   configTextByProfile: {},
+  tencentModuleDraftByProfile: {},
+  tencentModuleResultByProfile: {},
   activeTab: 'overview',
 };
 
@@ -815,7 +923,11 @@ function showToast(text, kind = 'info') {
 async function apiGet(path) {
   const resp = await fetch(`${API}${path}`);
   const data = await resp.json();
-  if (!resp.ok) throw new Error(data.error || `GET ${path} failed`);
+  if (!resp.ok) {
+    const error = new Error(data.error || `GET ${path} failed`);
+    error.data = data;
+    throw error;
+  }
   return data;
 }
 
@@ -826,7 +938,11 @@ async function apiPost(path, payload) {
     body: JSON.stringify(payload),
   });
   const data = await resp.json();
-  if (!resp.ok) throw new Error(data.error || `POST ${path} failed`);
+  if (!resp.ok) {
+    const error = new Error(data.error || `POST ${path} failed`);
+    error.data = data;
+    throw error;
+  }
   return data;
 }
 
@@ -998,6 +1114,102 @@ function renderLogs(logText, lines) {
   }
 }
 
+function ensureTencentModelOptions() {
+  const select = document.getElementById('tencentPrimaryModel');
+  if (!select || select.options.length) return;
+  select.innerHTML = TENCENT_PRIMARY_MODELS.map(model => `
+    <option value="${esc(model)}">${esc(model)}</option>
+  `).join('');
+}
+
+function buildTencentModuleDraft(detail) {
+  const config = detail?.config || {};
+  const provider = (((config.models || {}).providers || {})['tencent-coding-plan']) || {};
+  const primaryModel = (((config.agents || {}).defaults || {}).model || {}).primary;
+  return {
+    apiKey: typeof provider.apiKey === 'string' ? provider.apiKey : '',
+    primaryModel: TENCENT_PRIMARY_MODELS.includes(primaryModel) ? primaryModel : TENCENT_PRIMARY_MODELS[0],
+    probeAfterApply: true,
+  };
+}
+
+function storeProfileDetail(detail) {
+  const profile = detail?.summary?.profile;
+  if (!profile) return;
+  app.detailByProfile[profile] = detail;
+  app.configTextByProfile[profile] = JSON.stringify(detail.config, null, 2);
+  app.tencentModuleDraftByProfile[profile] = buildTencentModuleDraft(detail);
+}
+
+function ensureTencentModuleDraft(profile) {
+  if (!profile) return null;
+  const detail = app.detailByProfile[profile];
+  if (!app.tencentModuleDraftByProfile[profile]) {
+    app.tencentModuleDraftByProfile[profile] = buildTencentModuleDraft(detail);
+  }
+  return app.tencentModuleDraftByProfile[profile];
+}
+
+function formatTencentModuleResult(result) {
+  if (!result) return '选择实例后可预览 Tencent 模型包注入结果。';
+  const lines = [
+    `status: ${result.status || '-'}`,
+    `profile: ${result.profile || '-'}`,
+    `primaryModel: ${result.primaryModel || '-'}`,
+  ];
+  if (result.error) lines.push(`error: ${result.error}`);
+  if (result.validate) lines.push(`validate: rc=${result.validate.returncode}`);
+  if (result.restart) lines.push(`restart: rc=${result.restart.returncode}`);
+  if (result.probe) {
+    const probeBits = [
+      `probe: ${result.probe.ok ? 'ok' : 'fail'}`,
+      result.probe.httpStatus ? `http=${result.probe.httpStatus}` : '',
+      result.probe.message || '',
+    ].filter(Boolean);
+    lines.push(probeBits.join(' · '));
+  }
+  if (Array.isArray(result.changedPaths) && result.changedPaths.length) {
+    lines.push('');
+    lines.push('changedPaths:');
+    result.changedPaths.forEach(path => lines.push(`- ${path}`));
+  }
+  if (result.preview) {
+    lines.push('');
+    lines.push(JSON.stringify(result.preview, null, 2));
+  }
+  return lines.join('\n');
+}
+
+function renderTencentModulePanel() {
+  ensureTencentModelOptions();
+  const detail = currentDetail();
+  const apiKeyInput = document.getElementById('tencentApiKey');
+  const modelSelect = document.getElementById('tencentPrimaryModel');
+  const probeToggle = document.getElementById('tencentProbeToggle');
+  const resultBox = document.getElementById('tencentModuleResult');
+  if (!apiKeyInput || !modelSelect || !probeToggle || !resultBox) return;
+
+  if (!detail) {
+    apiKeyInput.value = '';
+    modelSelect.value = TENCENT_PRIMARY_MODELS[0];
+    probeToggle.checked = true;
+    apiKeyInput.disabled = true;
+    modelSelect.disabled = true;
+    probeToggle.disabled = true;
+    resultBox.textContent = '选择实例后可预览 Tencent 模型包注入结果。';
+    return;
+  }
+
+  const draft = ensureTencentModuleDraft(detail.summary.profile);
+  apiKeyInput.disabled = false;
+  modelSelect.disabled = false;
+  probeToggle.disabled = false;
+  apiKeyInput.value = draft?.apiKey || '';
+  modelSelect.value = draft?.primaryModel || TENCENT_PRIMARY_MODELS[0];
+  probeToggle.checked = draft?.probeAfterApply !== false;
+  resultBox.textContent = formatTencentModuleResult(app.tencentModuleResultByProfile[detail.summary.profile]);
+}
+
 // ===== Render: Config =====
 function renderConfig() {
   const detail = currentDetail();
@@ -1006,10 +1218,12 @@ function renderConfig() {
   if (!detail) {
     meta.textContent = '-';
     editor.value = '';
+    renderTencentModulePanel();
     return;
   }
   meta.textContent = detail.paths.configPath;
   editor.value = app.configTextByProfile[detail.summary.profile] || JSON.stringify(detail.config, null, 2);
+  renderTencentModulePanel();
 }
 
 // ===== Render: Ops =====
@@ -1071,7 +1285,7 @@ function renderAll() {
 }
 
 // ===== Actions =====
-async function refreshAll() {
+async function refreshAll(silent = false) {
   try {
     const [summary, diagnostics] = await Promise.all([
       apiGet('/api/openclaw/summary'),
@@ -1096,7 +1310,7 @@ async function refreshAll() {
       renderConfig();
       renderOps();
     }
-    showToast('已刷新');
+    if (!silent) showToast('已刷新');
   } catch (e) {
     showToast(`刷新失败: ${e.message}`, 'error');
   }
@@ -1138,8 +1352,7 @@ async function selectProfile(profile, silent = false) {
   renderSidebar();
   try {
     const detail = await apiGet(`/api/openclaw/instance?profile=${encodeURIComponent(profile)}`);
-    app.detailByProfile[profile] = detail;
-    app.configTextByProfile[profile] = JSON.stringify(detail.config, null, 2);
+    storeProfileDetail(detail);
     renderContentHead();
     renderOverview();
     renderDetail();
@@ -1242,9 +1455,13 @@ async function loadLogs(lines = 120, silent = false) {
 async function reloadConfig() {
   if (!app.selectedProfile) return;
   try {
-    const result = await apiGet(`/api/openclaw/config?profile=${encodeURIComponent(app.selectedProfile)}`);
-    app.configTextByProfile[app.selectedProfile] = JSON.stringify(result.config, null, 2);
+    const detail = await apiGet(`/api/openclaw/instance?profile=${encodeURIComponent(app.selectedProfile)}`);
+    storeProfileDetail(detail);
+    renderContentHead();
+    renderOverview();
+    renderDetail();
     renderConfig();
+    renderOps();
     showToast('已重新读取');
   } catch (e) {
     showToast(`读取失败: ${e.message}`, 'error');
@@ -1263,6 +1480,69 @@ async function saveConfig(restart) {
     await refreshAll();
   } catch (e) {
     showToast(`保存失败: ${e.message}`, 'error');
+  }
+}
+
+function updateTencentModuleDraft() {
+  if (!app.selectedProfile) return;
+  const draft = ensureTencentModuleDraft(app.selectedProfile);
+  if (!draft) return;
+  draft.apiKey = document.getElementById('tencentApiKey')?.value || '';
+  draft.primaryModel = document.getElementById('tencentPrimaryModel')?.value || TENCENT_PRIMARY_MODELS[0];
+  draft.probeAfterApply = !!document.getElementById('tencentProbeToggle')?.checked;
+}
+
+function currentTencentModulePayload(options) {
+  if (!app.selectedProfile) return null;
+  updateTencentModuleDraft();
+  const draft = ensureTencentModuleDraft(app.selectedProfile);
+  if (!draft) return null;
+  return {
+    profile: app.selectedProfile,
+    apiKey: draft.apiKey,
+    primaryModel: draft.primaryModel,
+    restartAfterSave: !!options.restartAfterSave,
+    probeAfterApply: !!draft.probeAfterApply,
+    dryRun: !!options.dryRun,
+  };
+}
+
+async function previewTencentModule() {
+  if (!app.selectedProfile) { showToast('先选择实例', 'warn'); return; }
+  const payload = currentTencentModulePayload({ dryRun: true, restartAfterSave: false });
+  try {
+    const result = await apiPost('/api/openclaw/config/tencent-coding-plan', payload);
+    app.tencentModuleResultByProfile[app.selectedProfile] = result;
+    renderTencentModulePanel();
+    showToast(result.probe && !result.probe.ok ? '预览完成，probe 失败' : '预览完成');
+  } catch (e) {
+    if (e.data?.status === 'failed') {
+      app.tencentModuleResultByProfile[app.selectedProfile] = e.data;
+      renderTencentModulePanel();
+    }
+    showToast(`预览失败: ${e.message}`, 'error');
+  }
+}
+
+async function applyTencentModule() {
+  if (!app.selectedProfile) { showToast('先选择实例', 'warn'); return; }
+  const payload = currentTencentModulePayload({ dryRun: false, restartAfterSave: true });
+  try {
+    const result = await apiPost('/api/openclaw/config/tencent-coding-plan', payload);
+    app.tencentModuleResultByProfile[app.selectedProfile] = result;
+    await refreshAll(true);
+    renderTencentModulePanel();
+    const kind = result.status === 'applied_with_probe_failure' ? 'warn' : 'info';
+    const text = result.status === 'applied_with_probe_failure'
+      ? `${app.selectedProfile} 已应用并重启，probe 失败`
+      : `${app.selectedProfile} 已应用并重启`;
+    showToast(text, kind);
+  } catch (e) {
+    if (e.data?.status === 'failed') {
+      app.tencentModuleResultByProfile[app.selectedProfile] = e.data;
+      renderTencentModulePanel();
+    }
+    showToast(`应用失败: ${e.message}`, 'error');
   }
 }
 

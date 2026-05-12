@@ -15,6 +15,8 @@ about keeping cross-layer contracts explicit:
   `systemd`.
 - Infra mutations must either finish coherently or roll back their own
   artifacts.
+- JSON flag fields must not be coerced with bare `bool(value)` because string
+  payloads like `"false"` become truthy and silently flip behavior.
 
 ---
 
@@ -166,6 +168,146 @@ about keeping cross-layer contracts explicit:
 
 ---
 
+## Scenario: Tencent Coding Plan Model Module Injection
+
+### 1. Scope / Trigger
+
+- Trigger: `POST /api/openclaw/config/tencent-coding-plan`
+- Why this needs code-spec depth:
+  - The request crosses frontend draft state, backend validation, on-disk
+    `openclaw.json`, optional provider probe, and optional service restart.
+  - The module is intentionally **partial-write** behavior: it owns only the
+    Tencent/OpenAI-related config fragment and must preserve unrelated
+    instance-specific settings.
+
+### 2. Signatures
+
+- API entry:
+  - `POST /api/openclaw/config/tencent-coding-plan`
+- Request body:
+  - `profile: string`
+  - `apiKey: string`
+  - `primaryModel: one of TENCENT_PRIMARY_MODELS`
+  - `dryRun?: boolean | "true" | "false" | 0 | 1`
+  - `restartAfterSave?: boolean | "true" | "false" | 0 | 1`
+  - `probeAfterApply?: boolean | "true" | "false" | 0 | 1`
+- Backend split:
+  - `manager_tt_backend.server.ExecHandler._handle_openclaw_tencent_model_module`
+  - `manager_tt_backend.actions.apply_tencent_model_module`
+  - `manager_tt_backend.model_modules.apply_tencent_model_package`
+  - `manager_tt_backend.model_modules.probe_tencent_model_package`
+
+### 3. Contracts
+
+- Request body must be a JSON object; arrays / scalars are invalid.
+- The backend-owned write scope is limited to:
+  - `models.mode`
+  - `models.providers.tencent-coding-plan`
+  - `agents.defaults.model.primary`
+  - `agents.defaults.models.tencent-coding-plan/*`
+  - `plugins.entries.openai.enabled`
+  - `plugins.allow` append-only when the list already exists
+- Unrelated config must be preserved exactly, including fields like:
+  - `gateway.port`
+  - `agents.defaults.workspace`
+  - other providers and plugins
+  - instance-local metadata / hooks / channels
+- `dryRun=true` means:
+  - no file write
+  - no backup creation
+  - no restart
+  - response `status="preview"`
+- `probeAfterApply=true` means:
+  - dry-run may still call the remote provider probe
+  - probe failure does **not** erase a successful config apply
+- Restart behavior:
+  - restart runs only after write + validate succeed
+  - restart failure returns `status="failed"` and reports that config was saved
+- Success status contract:
+  - `preview` -> dry-run success
+  - `applied` -> write/validate succeeded and probe is absent or ok
+  - `applied_with_probe_failure` -> write/validate succeeded, probe failed
+
+### 4. Validation & Error Matrix
+
+- Request body is not an object -> `400` with `json body 必须是对象`
+- `apiKey` missing / blank -> reject
+- `primaryModel` outside the fixed allowlist -> reject
+- Boolean-like flags parsed with bare `bool(value)` -> forbidden because
+  `"false"` would incorrectly become truthy
+- Config file path does not exist -> reject before any write
+- `dryRun=true` -> do not write or restart
+- Persisted config validate command returns non-zero -> restore original bytes,
+  return `status="failed"`, set `rollbackPerformed=true`
+- Probe HTTP/network failure after a valid apply -> return
+  `status="applied_with_probe_failure"`
+- Restart failure after a valid apply -> return `status="failed"` without
+  rolling back the validated config file
+
+### 5. Good / Base / Bad Cases
+
+- Good:
+  - User previews Tencent config on `designer`; response shows a masked preview
+    fragment and the file on disk stays unchanged.
+  - User applies Tencent config; backend preserves the existing workspace,
+    gateway port, and non-Tencent providers.
+- Base:
+  - Existing `plugins.allow` already contains `feishu` and `qwen`; backend only
+    appends `openai`.
+  - Existing `agents.defaults.models` contains stale Tencent entries; backend
+    replaces only the Tencent-prefixed entries and leaves non-Tencent models.
+- Bad:
+  - Replacing the entire `models.providers` map and deleting other providers
+  - Resetting `agents.defaults.workspace` or gateway settings while injecting
+    the model package
+  - Treating probe failure as if the write itself failed
+  - Using string `"false"` in JSON and accidentally triggering write/restart
+  - Keeping a stale frontend draft after reloading the instance detail from the
+    server
+
+### 6. Tests Required
+
+- Unit tests for module merge:
+  - preserves unrelated config blocks
+  - removes stale Tencent model aliases while preserving non-Tencent aliases
+  - appends `openai` to `plugins.allow` only when the allowlist exists
+- Unit tests for apply flow:
+  - dry-run does not write or back up
+  - validate failure rolls back original file bytes
+  - probe failure maps to `applied_with_probe_failure`
+  - string boolean fields like `"false"` remain false
+- Handler tests:
+  - reject non-object JSON payloads before reaching action logic
+- Frontend regression expectation:
+  - server-derived Tencent draft state must be rebuilt after config/detail
+    reload so preview/apply reflects persisted config
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+- The backend uses `bool(payload["dryRun"])`, so `"false"` becomes true/false
+  unpredictably depending on caller type.
+- The apply path rewrites `openclaw.json`, then leaves the broken file on disk
+  after validation fails.
+- The merge helper overwrites all provider/plugin state instead of only the
+  Tencent-owned fragment.
+- The frontend keeps an old Tencent draft after a refetch and shows stale API
+  key / model data.
+
+#### Correct
+
+- Boolean flags are normalized explicitly from booleans, `0/1`, and string
+  forms before control-flow decisions.
+- The apply path writes a backup, validates the persisted file, and restores the
+  original bytes on validation failure.
+- The merge helper owns only the Tencent/OpenAI fragment and preserves other
+  instance-specific config.
+- Frontend refetch paths rebuild server-derived drafts from the latest instance
+  detail payload.
+
+---
+
 ## Forbidden Patterns
 
 - Do not add new instance-create behavior directly inside the HTTP handler.
@@ -173,6 +315,8 @@ about keeping cross-layer contracts explicit:
 - Do not infer host/Docker policy from raw strings without canonicalization.
 - Do not mutate systemd, compose, or runtime-meta artifacts in separate modules
   without a single create path owning rollback behavior.
+- Do not parse JSON flag fields with bare `bool(value)` when the API accepts
+  string/number forms.
 
 ---
 
@@ -191,6 +335,9 @@ about keeping cross-layer contracts explicit:
   - `GET /cgi-bin/status`
   - `GET /api/openclaw/summary`
   - one authenticated Docker bridge route when bridge logic changes
+- Config-module changes should also cover:
+  - dry-run smoke against the live HTTP endpoint
+  - rollback and probe-status behavior in unit tests
 - Do not run destructive live create/delete flows on the developer machine just
   to prove routing.
 
@@ -207,3 +354,6 @@ about keeping cross-layer contracts explicit:
   discovery and future port-conflict scans?
 - Are runtime aliases normalized consistently in policy and listing paths?
 - Do delete flows clean up Docker-specific artifacts when removing state?
+- Are JSON boolean flags normalized explicitly instead of `bool(value)`?
+- Does config-module write scope stay limited to the documented Tencent-owned
+  fragment?

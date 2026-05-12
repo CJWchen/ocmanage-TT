@@ -9,7 +9,7 @@ import sys
 import threading
 import urllib.parse
 
-from .actions import perform_instance_action, save_config
+from .actions import apply_tencent_model_module, perform_instance_action, save_config
 from .config import (
     DEFAULT_TIMEOUT_MS,
     EXEC_DANGEROUS_PATTERNS,
@@ -68,6 +68,9 @@ class ExecHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/openclaw/config":
             self._handle_openclaw_config()
             return
+        if path == "/api/openclaw/config/tencent-coding-plan":
+            self._handle_openclaw_tencent_model_module()
+            return
         if path == "/api/openclaw/logs":
             self._handle_openclaw_logs(parsed.query)
             return
@@ -114,9 +117,12 @@ class ExecHandler(http.server.BaseHTTPRequestHandler):
         content_len = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(content_len) if content_len else b"{}"
         try:
-            return json.loads(body)
+            payload = json.loads(body)
         except json.JSONDecodeError as exc:
             raise ValueError("invalid json") from exc
+        if not isinstance(payload, dict):
+            raise ValueError("json body 必须是对象")
+        return payload
 
     def _bridge_token_from_headers(self) -> str | None:
         token = (self.headers.get("X-OpenClaw-Bridge-Token") or "").strip()
@@ -302,6 +308,50 @@ class ExecHandler(http.server.BaseHTTPRequestHandler):
             )
         except Exception as exc:
             self._send_json(400, {"error": str(exc)})
+
+    def _handle_openclaw_tencent_model_module(self):
+        if self.command != "POST":
+            self._send_json(405, {"error": "method not allowed"})
+            return
+
+        payload: dict = {}
+        try:
+            payload = self._read_json_body()
+            result = apply_tencent_model_module(payload)
+            ok = result.get("status") in {"preview", "applied", "applied_with_probe_failure"}
+            body = dict(result)
+            if ok and result.get("status") != "preview":
+                body["summary"] = openclaw_summary()
+            record_manager_action(
+                {
+                    **self._request_meta(),
+                    "scope": "openclaw-config-tencent-model-module",
+                    "profile": result.get("profile"),
+                    "primaryModel": result.get("primaryModel"),
+                    "dryRun": bool(result.get("dryRun")),
+                    "restartAfterSave": bool(result.get("restartAfterSave")),
+                    "probeAfterApply": bool(result.get("probeAfterApply")),
+                    "ok": ok,
+                    "status": result.get("status"),
+                }
+            )
+            self._send_json(200 if ok else 400, body)
+        except Exception as exc:
+            record_manager_action(
+                {
+                    **self._request_meta(),
+                    "scope": "openclaw-config-tencent-model-module",
+                    "profile": payload.get("profile"),
+                    "primaryModel": payload.get("primaryModel"),
+                    "dryRun": payload.get("dryRun"),
+                    "restartAfterSave": payload.get("restartAfterSave"),
+                    "probeAfterApply": payload.get("probeAfterApply"),
+                    "ok": False,
+                    "status": "failed",
+                    "error": str(exc),
+                }
+            )
+            self._send_json(400, {"status": "failed", "error": str(exc)})
 
     def _handle_openclaw_diagnostics(self):
         try:

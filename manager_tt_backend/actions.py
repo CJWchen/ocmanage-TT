@@ -37,6 +37,14 @@ from .instances import (
     relocate_legacy_docker_session_backups,
     reset_docker_sessions,
 )
+from .model_modules import (
+    TENCENT_MODULE_OWNED_PATHS,
+    TENCENT_PROVIDER_ID,
+    apply_tencent_model_package,
+    extract_tencent_module_fragment,
+    probe_tencent_model_package,
+    validate_tencent_primary_model,
+)
 from .system import backup_file, read_text_if_exists, run_shell
 
 
@@ -370,6 +378,112 @@ def perform_instance_action(payload: dict) -> dict:
         result = run_shell("systemctl --user daemon-reload", timeout_ms=15000)
         return {"stdout": result.stdout, "stderr": result.stderr, "returncode": result.returncode}
     raise ValueError(f"未知 action: {action}")
+
+
+def _validate_profile_config(profile: str) -> dict:
+    profile_arg = f"--profile {profile} " if profile != "default" else ""
+    result = run_shell(
+        f"{OPENCLAW_BIN} {profile_arg}config validate --json",
+        timeout_ms=20000,
+    )
+    return {
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+        "returncode": result.returncode,
+    }
+
+
+def _coerce_bool_field(payload: dict, key: str, *, default: bool = False) -> bool:
+    value = payload.get(key)
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in {0, 1}:
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"", "0", "false", "no", "off"}:
+            return False
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+    raise ValueError(f"{key} 必须是布尔值")
+
+
+def apply_tencent_model_module(payload: dict) -> dict:
+    if not isinstance(payload, dict):
+        raise ValueError("payload 必须是对象")
+
+    profile = normalize_profile(payload.get("profile"))
+    api_key_value = payload.get("apiKey")
+    if not isinstance(api_key_value, str) or not api_key_value.strip():
+        raise ValueError("apiKey 不能为空")
+    api_key = api_key_value.strip()
+    primary_model = validate_tencent_primary_model(payload.get("primaryModel"))
+    restart_after_save = _coerce_bool_field(payload, "restartAfterSave")
+    probe_after_apply = _coerce_bool_field(payload, "probeAfterApply")
+    dry_run = _coerce_bool_field(payload, "dryRun")
+
+    path = config_path_for_profile(profile)
+    if not path.exists():
+        raise FileNotFoundError(f"配置文件不存在: {path}")
+
+    current_config = load_json(path)
+    merged_config = apply_tencent_model_package(current_config, api_key, primary_model)
+    preview_fragment = extract_tencent_module_fragment(merged_config, mask_api_key=True)
+    result = {
+        "performedAt": utc_now_iso(),
+        "profile": profile,
+        "module": TENCENT_PROVIDER_ID,
+        "primaryModel": primary_model,
+        "dryRun": dry_run,
+        "restartAfterSave": restart_after_save,
+        "probeAfterApply": probe_after_apply,
+        "writePerformed": False,
+        "rollbackPerformed": False,
+        "configPath": str(path),
+        "changedPaths": list(TENCENT_MODULE_OWNED_PATHS),
+        "preview": preview_fragment,
+    }
+
+    if dry_run:
+        result["status"] = "preview"
+        if probe_after_apply:
+            result["probe"] = probe_tencent_model_package(api_key, primary_model)
+        return result
+
+    original_bytes = path.read_bytes()
+    backup = backup_file(path)
+    result["backupPath"] = str(backup) if backup else None
+    write_json(path, merged_config)
+    result["writePerformed"] = True
+
+    validate_result = _validate_profile_config(profile)
+    result["validate"] = validate_result
+    if validate_result["returncode"] != 0:
+        path.write_bytes(original_bytes)
+        result["status"] = "failed"
+        result["rollbackPerformed"] = True
+        result["error"] = "配置校验失败，已回滚"
+        return result
+
+    if probe_after_apply:
+        result["probe"] = probe_tencent_model_package(api_key, primary_model)
+
+    if restart_after_save:
+        restart_result = run_systemctl_action(service_name_for_profile(profile), "restart")
+        result["restart"] = restart_result
+        if restart_result["returncode"] != 0:
+            result["status"] = "failed"
+            result["error"] = "配置已保存，但重启失败"
+            return result
+
+    probe_result = result.get("probe")
+    if isinstance(probe_result, dict) and not probe_result.get("ok", False):
+        result["status"] = "applied_with_probe_failure"
+    else:
+        result["status"] = "applied"
+    return result
 
 
 def save_config(payload: dict) -> dict:
