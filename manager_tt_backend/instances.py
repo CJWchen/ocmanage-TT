@@ -29,6 +29,9 @@ from .config import (
     utc_now_iso,
 )
 from .create_modes import normalize_runtime_mode
+from .feishu_modules import summarize_feishu_channel
+from .feishu_runtime import config_requests_feishu, gather_feishu_runtime_status
+from .feishu_qr_sessions import get_feishu_qr_session_summary
 from .system import (
     docker_runtime_expected_port,
     extract_port_from_unit_text,
@@ -62,18 +65,7 @@ DOCKER_BIND_MOUNT_PATTERN = re.compile(
 
 
 def parse_feishu_channel(config: dict) -> dict:
-    feishu = config.get("channels", {}).get("feishu", {})
-    secret_provider = feishu.get("appSecret") if isinstance(feishu.get("appSecret"), dict) else None
-    return {
-        "enabled": bool(feishu.get("enabled")),
-        "appId": feishu.get("appId"),
-        "usesSecretProvider": bool(secret_provider),
-        "domain": feishu.get("domain"),
-        "connectionMode": feishu.get("connectionMode"),
-        "dmPolicy": feishu.get("dmPolicy"),
-        "groupPolicy": feishu.get("groupPolicy"),
-        "requireMention": feishu.get("requireMention"),
-    }
+    return summarize_feishu_channel(config)
 
 
 def extract_config_summary(profile: str, path: Path, config: dict) -> dict:
@@ -626,7 +618,14 @@ def build_docker_bridge_alignment_check(runtime: dict) -> dict:
     }
 
 
-def build_instance_checks(profile: str, summary: dict, runtime: dict, service_text: str | None, override_text: str | None) -> list[dict]:
+def build_instance_checks(
+    profile: str,
+    summary: dict,
+    runtime: dict,
+    service_text: str | None,
+    override_text: str | None,
+    feishu_runtime: dict | None = None,
+) -> list[dict]:
     checks: list[dict] = []
     config_port = summary.get("port")
     service_port = extract_port_from_unit_text(service_text)
@@ -731,6 +730,35 @@ def build_instance_checks(profile: str, summary: dict, runtime: dict, service_te
                 "message": "session 里没有宿主机路径残留" if not session_refs else f"session 仍引用宿主机路径，共 {len(session_refs)} 个文件",
             }
         )
+    if config_requests_feishu(summary.get("feishu") or {}) and isinstance(feishu_runtime, dict):
+        plugin = feishu_runtime.get("plugin") if isinstance(feishu_runtime.get("plugin"), dict) else {}
+        channel = feishu_runtime.get("channel") if isinstance(feishu_runtime.get("channel"), dict) else {}
+        issues = feishu_runtime.get("issues") if isinstance(feishu_runtime.get("issues"), list) else []
+        checks.append(
+            {
+                "name": "feishu_plugin_loaded",
+                "ok": bool(plugin.get("loaded")),
+                "message": plugin.get("error") or f"plugin status={plugin.get('status') or 'unknown'}",
+            }
+        )
+        checks.append(
+            {
+                "name": "feishu_channel_running",
+                "ok": bool(channel.get("running")),
+                "message": channel.get("lastError") or channel.get("error") or f"channel running={channel.get('running')}",
+            }
+        )
+        checks.append(
+            {
+                "name": "feishu_channel_ready",
+                "ok": bool(feishu_runtime.get("ready")),
+                "message": (
+                    "Feishu channel 已 ready"
+                    if feishu_runtime.get("ready")
+                    else (issues[0] if issues else f"feishu status={feishu_runtime.get('status') or 'unknown'}")
+                ),
+            }
+        )
     return checks
 
 
@@ -751,10 +779,13 @@ def read_instance(profile: str) -> dict:
     override_path = Path(runtime["overridePath"]) if runtime.get("overridePath") else None
     service_text = read_text_if_exists(service_path)
     override_text = read_text_if_exists(override_path)
-    checks = build_instance_checks(profile, summary, runtime, service_text, override_text)
+    feishu_runtime = gather_feishu_runtime_status(profile, runtime=runtime) if config_requests_feishu(summary.get("feishu") or {}) else None
+    checks = build_instance_checks(profile, summary, runtime, service_text, override_text, feishu_runtime)
     return {
         "summary": summary,
         "runtime": runtime,
+        "feishuRuntime": feishu_runtime,
+        "feishuQrSession": get_feishu_qr_session_summary(profile),
         "config": config,
         "checks": checks,
         "manual": build_manual_commands(profile, summary, runtime),
@@ -796,6 +827,7 @@ def list_instances() -> list[dict]:
                     "mainPid": runtime["mainPid"],
                     "runtimeMode": runtime.get("runtimeMode", "systemd"),
                     "hostControlBridge": runtime.get("hostControlBridge"),
+                    "feishuQrSession": get_feishu_qr_session_summary(profile),
                 }
             )
         except Exception as exc:
@@ -807,6 +839,7 @@ def list_instances() -> list[dict]:
                     "configPath": str(path),
                     "runtimeMode": runtime_mode,
                     "hostControlBridge": build_host_control_bridge(profile) if runtime_mode == "docker" else None,
+                    "feishuQrSession": get_feishu_qr_session_summary(profile),
                     "error": str(exc),
                 }
             )

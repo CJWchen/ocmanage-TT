@@ -4,7 +4,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from manager_tt_backend.actions import create_instance, delete_instance
+from manager_tt_backend.actions import create_instance, delete_instance, perform_instance_action
 from manager_tt_backend.docker_managed import create_instance_via_docker_manager
 from manager_tt_backend.instances import list_instances
 
@@ -37,6 +37,20 @@ class CreateInstanceActionTests(unittest.TestCase):
         create_instance({"profile": "ops", "runtimeMode": "host"})
 
         host_create.assert_called_once_with({"profile": "ops", "runtimeMode": "host"})
+
+
+class EnsureActionBoolCoercionTests(unittest.TestCase):
+    @patch("manager_tt_backend.actions.doctor_repair_instance")
+    @patch("manager_tt_backend.actions.ensure_instance")
+    @patch("manager_tt_backend.actions.read_instance")
+    def test_string_false_force_host_managed_keeps_docker_ensure_path(self, read_instance, ensure_instance, doctor_repair) -> None:
+        read_instance.return_value = {"runtime": {"runtimeMode": "docker"}}
+        doctor_repair.return_value = {"returncode": 0}
+
+        perform_instance_action({"action": "ensure", "profile": "designer", "forceHostManaged": "false"})
+
+        doctor_repair.assert_called_once_with({"profile": "designer"})
+        ensure_instance.assert_not_called()
 
 
 class DockerCreateRollbackTests(unittest.TestCase):
@@ -140,6 +154,13 @@ class DockerCreatePortGuardTests(unittest.TestCase):
 
 
 class DeleteInstanceTests(unittest.TestCase):
+    @patch("manager_tt_backend.actions.ensure_feishu_qr_session_unlocked", side_effect=RuntimeError("qr locked"))
+    def test_delete_is_blocked_when_qr_session_is_active(self, ensure_unlocked) -> None:
+        with self.assertRaisesRegex(RuntimeError, "qr locked"):
+            delete_instance({"profile": "designer", "removeStateDir": False})
+
+        ensure_unlocked.assert_called_once_with("designer", scope="删除实例")
+
     def test_delete_removes_docker_artifacts_when_state_dir_is_removed(self) -> None:
         with TemporaryDirectory() as tmp:
             home = Path(tmp) / "home"
@@ -278,7 +299,7 @@ class DeleteInstanceTests(unittest.TestCase):
                 patch("manager_tt_backend.actions.run_shell", side_effect=fake_run_shell),
                 patch("manager_tt_backend.docker_managed.run_shell", side_effect=fake_run_shell),
             ):
-                result = delete_instance({"profile": "designer", "removeStateDir": False})
+                result = delete_instance({"profile": "designer", "removeStateDir": "false"})
                 items = list_instances()
 
             self.assertEqual(result["returncode"], 0)

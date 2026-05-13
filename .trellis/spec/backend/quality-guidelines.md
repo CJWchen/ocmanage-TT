@@ -308,6 +308,156 @@ about keeping cross-layer contracts explicit:
 
 ---
 
+## Scenario: Feishu Channel Injection + QR Session Management
+
+### 1. Scope / Trigger
+
+- Trigger A: `POST /api/openclaw/config/feishu-channel`
+- Trigger B:
+  - `POST /api/openclaw/feishu/qr/start`
+  - `GET /api/openclaw/feishu/qr/status`
+  - `POST /api/openclaw/feishu/qr/input`
+  - `POST /api/openclaw/feishu/qr/stop`
+- Why this needs code-spec depth:
+  - The feature mixes partial config mutation with an interactive PTY-backed
+    CLI session.
+  - Feishu credentials already exist in multiple config shapes and must not be
+    silently migrated.
+  - A live QR session must temporarily lock config-mutating actions for that
+    same profile.
+
+### 2. Signatures
+
+- Feishu config injection request:
+  - `profile: string`
+  - `appId: string`
+  - `appSecret: string`
+  - `accountId?: string`
+  - `dryRun?: boolean | "true" | "false" | 0 | 1`
+  - `restartAfterSave?: boolean | "true" | "false" | 0 | 1`
+- QR start request:
+  - `profile: string`
+  - `verbose?: boolean | "true" | "false" | 0 | 1`
+- QR input request:
+  - `profile: string`
+  - `input: string`
+- Backend split:
+  - `manager_tt_backend.actions.apply_feishu_channel_module`
+  - `manager_tt_backend.feishu_modules.apply_feishu_channel_package`
+  - `manager_tt_backend.feishu_qr_sessions.start_feishu_qr_session`
+  - `manager_tt_backend.feishu_qr_sessions.get_feishu_qr_session_status`
+  - `manager_tt_backend.feishu_qr_sessions.send_feishu_qr_input`
+  - `manager_tt_backend.feishu_qr_sessions.stop_feishu_qr_session`
+
+### 3. Contracts
+
+- Feishu config injection owns only the Feishu channel credential fragment and
+  must preserve unrelated model/gateway/workspace/plugin state.
+- Credential-shape preservation:
+  - If the profile already uses top-level `channels.feishu.appId/appSecret`,
+    keep writing that shape.
+  - If the profile already uses `channels.feishu.accounts.<id>`, keep writing
+    the account shape and update `defaultAccount`.
+  - Do not auto-migrate one shape into the other during injection.
+- Validated write contract:
+  - raw config save and config-module injection must both use the same
+    write -> validate -> rollback-on-failure flow.
+- QR session contract:
+  - one active Feishu QR session per profile maximum
+  - QR session command must include the target profile when profile is not
+    `default`
+  - QR status is process-local manager state, not inferred from disk
+- Locking contract:
+  - while a profile has an active Feishu QR session, backend must reject
+    profile-scoped config mutations for that same profile, including:
+    `save_config`, `ensure`, `doctor repair`, `delete`, and config modules
+- Session isolation:
+  - a QR session for `designer` must not block or mutate `fapiao`, `default`,
+    or any other profile
+
+### 4. Validation & Error Matrix
+
+- `appId` missing / blank -> reject
+- `appSecret` missing / blank -> reject
+- illegal `accountId` characters -> reject
+- QR `input` missing / empty -> reject
+- QR start on a profile with no config file -> reject before launching PTY
+- second QR start while the same profile already has an active session ->
+  reject
+- config validate returns non-zero after Feishu injection or raw save ->
+  restore original file bytes, return `status="failed"`, do not restart
+- any protected mutation attempted during active QR session -> reject with a
+  profile-scoped lock error
+- boolean-like flags parsed via bare `bool(value)` -> forbidden because
+  `"false"` becomes truthy
+
+### 5. Good / Base / Bad Cases
+
+- Good:
+  - `designer` starts a Feishu QR session; `designer` config-save buttons lock,
+    but `fapiao` remains operable.
+  - A top-level Feishu config receives injected credentials and keeps existing
+    `dmPolicy` / `groupPolicy` untouched.
+  - An account-mode Feishu config updates the active account credentials without
+    deleting sibling accounts.
+- Base:
+  - QR session exits; next refetch updates instance detail and unlocks write
+    operations.
+  - Raw config save fails validation; backend returns failure and leaves the
+    original config on disk.
+- Bad:
+  - Launching a QR login against the default profile because `--profile` was
+    omitted for a named instance.
+  - Converting an account-mode Feishu config into top-level credentials during
+    injection.
+  - Letting `delete` or `ensure` run against a profile that still has an active
+    QR session.
+  - Treating sanitized terminal output as authoritative config state instead of
+    reloading from disk after session exit.
+
+### 6. Tests Required
+
+- Unit tests for Feishu module merge:
+  - top-level credential shape is preserved
+  - account-based credential shape is preserved
+  - sibling Feishu accounts remain intact
+- Apply/save tests:
+  - dry-run does not write
+  - validation failure rolls back bytes and skips restart
+  - string boolean flags like `"false"` remain false
+- Action/API tests:
+  - QR start flag coercion uses explicit boolean normalization
+  - QR lock blocks delete / ensure / save and config module writes
+- Utility tests:
+  - QR command includes `--profile` only for non-default profiles
+  - terminal sanitizer removes ANSI control sequences
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+- A named instance starts QR login without `--profile`, so the default profile
+  is mutated instead.
+- Raw config save and module injection each implement different validation and
+  rollback behavior.
+- Backend locks only the Feishu module endpoint, but leaves delete/ensure paths
+  writable during an active QR session.
+- Injection rewrites Feishu config shape instead of preserving the instance's
+  current credential layout.
+
+#### Correct
+
+- QR session launch derives the command from the target profile and isolates the
+  PTY session by profile key.
+- All config writes use the same validated persistence helper and roll back on
+  validation failure.
+- Profile-scoped mutation paths consult the Feishu QR lock before mutating
+  config/runtime state.
+- Feishu injection updates only the active credential shape already used by that
+  instance.
+
+---
+
 ## Forbidden Patterns
 
 - Do not add new instance-create behavior directly inside the HTTP handler.
@@ -317,6 +467,10 @@ about keeping cross-layer contracts explicit:
   without a single create path owning rollback behavior.
 - Do not parse JSON flag fields with bare `bool(value)` when the API accepts
   string/number forms.
+- Do not implement raw config saves with a different write/validate/rollback
+  flow than config-module writes.
+- Do not allow profile-scoped config mutations to bypass an active Feishu QR
+  session lock.
 
 ---
 
@@ -338,6 +492,10 @@ about keeping cross-layer contracts explicit:
 - Config-module changes should also cover:
   - dry-run smoke against the live HTTP endpoint
   - rollback and probe-status behavior in unit tests
+- Interactive PTY-backed flows should also cover:
+  - profile isolation for the spawned command
+  - lock behavior for conflicting mutations
+  - terminal output sanitization in pure unit tests
 - Do not run destructive live create/delete flows on the developer machine just
   to prove routing.
 
@@ -357,3 +515,7 @@ about keeping cross-layer contracts explicit:
 - Are JSON boolean flags normalized explicitly instead of `bool(value)`?
 - Does config-module write scope stay limited to the documented Tencent-owned
   fragment?
+- Do raw config saves and config-module writes share the same validation +
+  rollback contract?
+- Does an active Feishu QR session block all same-profile mutations that could
+  race with the interactive CLI flow?

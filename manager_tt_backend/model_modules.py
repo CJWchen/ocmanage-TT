@@ -5,6 +5,8 @@ import json
 import urllib.error
 import urllib.request
 
+from .config_modules import ensure_dict, mask_secret, truncate_text
+
 TENCENT_PROVIDER_ID = "tencent-coding-plan"
 TENCENT_PROVIDER_BASE_URL = "https://api.lkeap.cloud.tencent.com/coding/v3"
 TENCENT_PRIMARY_MODELS = (
@@ -101,33 +103,6 @@ TENCENT_MODEL_DEFINITIONS = (
 )
 
 
-def _ensure_dict(container: dict, key: str) -> dict:
-    value = container.get(key)
-    if isinstance(value, dict):
-        return value
-    value = {}
-    container[key] = value
-    return value
-
-
-def _truncate_text(text: str | None, limit: int = 600) -> str:
-    value = (text or "").strip()
-    if len(value) <= limit:
-        return value
-    return value[: limit - 3] + "..."
-
-
-def _mask_secret(secret: str | None) -> str | None:
-    if not isinstance(secret, str):
-        return secret
-    value = secret.strip()
-    if not value:
-        return ""
-    if len(value) <= 8:
-        return "*" * len(value)
-    return f"{value[:4]}...{value[-4:]}"
-
-
 def validate_tencent_primary_model(primary_model: str | None) -> str:
     candidate = primary_model.strip() if isinstance(primary_model, str) else ""
     if candidate not in TENCENT_PRIMARY_MODELS:
@@ -157,14 +132,14 @@ def apply_tencent_model_package(config: dict, api_key: str, primary_model: str) 
     validate_tencent_primary_model(primary_model)
     merged = copy.deepcopy(config)
 
-    models = _ensure_dict(merged, "models")
+    models = ensure_dict(merged, "models")
     models["mode"] = "merge"
-    providers = _ensure_dict(models, "providers")
+    providers = ensure_dict(models, "providers")
     providers[TENCENT_PROVIDER_ID] = build_tencent_provider_config(api_key)
 
-    agents = _ensure_dict(merged, "agents")
-    defaults = _ensure_dict(agents, "defaults")
-    default_model = _ensure_dict(defaults, "model")
+    agents = ensure_dict(merged, "agents")
+    defaults = ensure_dict(agents, "defaults")
+    default_model = ensure_dict(defaults, "model")
     default_model["primary"] = primary_model
 
     default_models = defaults.get("models")
@@ -177,8 +152,8 @@ def apply_tencent_model_package(config: dict, api_key: str, primary_model: str) 
     for full_model_name in TENCENT_PRIMARY_MODELS:
         default_models[full_model_name] = {}
 
-    plugins = _ensure_dict(merged, "plugins")
-    plugin_entries = _ensure_dict(plugins, "entries")
+    plugins = ensure_dict(merged, "plugins")
+    plugin_entries = ensure_dict(plugins, "entries")
     openai_entry = plugin_entries.get("openai")
     if not isinstance(openai_entry, dict):
         openai_entry = {}
@@ -197,7 +172,7 @@ def extract_tencent_module_fragment(config: dict, *, mask_api_key: bool = False)
     providers = models.get("providers") if isinstance(models.get("providers"), dict) else {}
     provider_config = copy.deepcopy(providers.get(TENCENT_PROVIDER_ID) or {})
     if mask_api_key and isinstance(provider_config.get("apiKey"), str):
-        provider_config["apiKey"] = _mask_secret(provider_config["apiKey"])
+        provider_config["apiKey"] = mask_secret(provider_config["apiKey"])
 
     agents = config.get("agents") if isinstance(config.get("agents"), dict) else {}
     defaults = agents.get("defaults") if isinstance(agents.get("defaults"), dict) else {}
@@ -280,7 +255,7 @@ def probe_tencent_model_package(api_key: str, primary_model: str, *, timeout_sec
                 "model": model_name,
                 "url": url,
                 "message": message or "probe 成功",
-                "responseExcerpt": _truncate_text(raw),
+                "responseExcerpt": truncate_text(raw),
             }
     except urllib.error.HTTPError as exc:
         raw = exc.read().decode("utf-8", errors="replace")
@@ -299,8 +274,8 @@ def probe_tencent_model_package(api_key: str, primary_model: str, *, timeout_sec
             "httpStatus": exc.code,
             "model": model_name,
             "url": url,
-            "message": _truncate_text(message),
-            "responseExcerpt": _truncate_text(raw),
+            "message": truncate_text(message),
+            "responseExcerpt": truncate_text(raw),
         }
     except Exception as exc:
         return {
@@ -309,6 +284,6 @@ def probe_tencent_model_package(api_key: str, primary_model: str, *, timeout_sec
             "httpStatus": None,
             "model": model_name,
             "url": url,
-            "message": _truncate_text(str(exc)),
+            "message": truncate_text(str(exc)),
             "responseExcerpt": "",
         }

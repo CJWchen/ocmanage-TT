@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from manager_tt_backend.instances import (
     build_docker_bridge_alignment_check,
+    build_instance_checks,
     build_path_translation,
     find_docker_session_host_path_refs,
     list_instances,
@@ -173,6 +174,42 @@ class DockerSessionPathSafetyTests(unittest.TestCase):
                 hits = find_docker_session_host_path_refs("designer", {}, runtime)
 
         self.assertEqual(hits, [str(session_path)])
+
+
+class FeishuRuntimeCheckTests(unittest.TestCase):
+    def test_instance_checks_include_feishu_runtime_health_when_enabled(self) -> None:
+        checks = build_instance_checks(
+            "designer",
+            {
+                "configPath": "/tmp/openclaw.json",
+                "port": 19789,
+                "feishu": {"enabled": True, "hasAppId": True, "hasAppSecret": True},
+            },
+            {
+                "runtimeMode": "systemd",
+                "activeState": "active",
+                "subState": "running",
+                "serviceFileExists": True,
+                "overrideFileExists": True,
+                "portOwners": [{"localAddress": "127.0.0.1:19789"}],
+            },
+            "[Service]\nExecStart=openclaw gateway --port 19789\n",
+            "[Service]\nExecStart=openclaw --profile designer gateway\n",
+            {
+                "ready": False,
+                "status": "plugin_missing",
+                "plugin": {"loaded": False, "status": "missing", "error": "Plugin not found: feishu"},
+                "channel": {"running": False, "configured": False, "error": "missing"},
+                "issues": ["Plugin not found: feishu"],
+            },
+        )
+
+        by_name = {item["name"]: item for item in checks}
+        self.assertIn("feishu_plugin_loaded", by_name)
+        self.assertFalse(by_name["feishu_plugin_loaded"]["ok"])
+        self.assertIn("Plugin not found: feishu", by_name["feishu_plugin_loaded"]["message"])
+        self.assertIn("feishu_channel_ready", by_name)
+        self.assertFalse(by_name["feishu_channel_ready"]["ok"])
 
 
 if __name__ == "__main__":

@@ -9,7 +9,13 @@ import sys
 import threading
 import urllib.parse
 
-from .actions import apply_tencent_model_module, perform_instance_action, save_config
+from .actions import (
+    _coerce_bool_field,
+    apply_feishu_channel_module,
+    apply_tencent_model_module,
+    perform_instance_action,
+    save_config,
+)
 from .config import (
     DEFAULT_TIMEOUT_MS,
     EXEC_DANGEROUS_PATTERNS,
@@ -29,6 +35,12 @@ from .instances import (
     record_manager_action,
     require_bridge_token,
     summarize_bridge_action_result,
+)
+from .feishu_qr_sessions import (
+    get_feishu_qr_session_status,
+    send_feishu_qr_input,
+    start_feishu_qr_session,
+    stop_feishu_qr_session,
 )
 from .system import read_service_logs, run_shell
 
@@ -68,8 +80,23 @@ class ExecHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/openclaw/config":
             self._handle_openclaw_config()
             return
+        if path in {"/api/openclaw/config/feishu-channel", "/api/openclaw/config/feishu"}:
+            self._handle_openclaw_feishu_channel_module()
+            return
         if path == "/api/openclaw/config/tencent-coding-plan":
             self._handle_openclaw_tencent_model_module()
+            return
+        if path == "/api/openclaw/feishu/qr/status":
+            self._handle_openclaw_feishu_qr_status(parsed.query)
+            return
+        if path == "/api/openclaw/feishu/qr/start":
+            self._handle_openclaw_feishu_qr_start()
+            return
+        if path == "/api/openclaw/feishu/qr/input":
+            self._handle_openclaw_feishu_qr_input()
+            return
+        if path == "/api/openclaw/feishu/qr/stop":
+            self._handle_openclaw_feishu_qr_stop()
             return
         if path == "/api/openclaw/logs":
             self._handle_openclaw_logs(parsed.query)
@@ -220,6 +247,7 @@ class ExecHandler(http.server.BaseHTTPRequestHandler):
             result = perform_instance_action(payload)
             profile = payload.get("profile")
             action = payload.get("action")
+            force_host_managed = _coerce_bool_field(payload, "forceHostManaged") if action == "ensure" else False
             record_manager_action(
                 {
                     **self._request_meta(),
@@ -228,7 +256,7 @@ class ExecHandler(http.server.BaseHTTPRequestHandler):
                     "action": action,
                     "ok": int(result.get("returncode", 1)) == 0,
                     "returncode": int(result.get("returncode", 1)),
-                    "forceHostManaged": bool(payload.get("forceHostManaged")),
+                    "forceHostManaged": force_host_managed,
                 }
             )
             self._send_json(
@@ -269,17 +297,19 @@ class ExecHandler(http.server.BaseHTTPRequestHandler):
         try:
             payload = self._read_json_body()
             result = save_config(payload)
+            ok = result.get("status") == "saved"
             record_manager_action(
                 {
                     **self._request_meta(),
                     "scope": "openclaw-config-save",
                     "profile": payload.get("profile"),
-                    "restartAfterSave": bool(payload.get("restartAfterSave")),
-                    "ok": True,
+                    "restartAfterSave": bool(result.get("restartAfterSave")),
+                    "ok": ok,
+                    "status": result.get("status"),
                     "validateReturncode": int((result.get("validate") or {}).get("returncode", 0)),
                 }
             )
-            self._send_json(200, result)
+            self._send_json(200 if ok else 400, result)
         except Exception as exc:
             record_manager_action(
                 {
@@ -308,6 +338,47 @@ class ExecHandler(http.server.BaseHTTPRequestHandler):
             )
         except Exception as exc:
             self._send_json(400, {"error": str(exc)})
+
+    def _handle_openclaw_feishu_channel_module(self):
+        if self.command != "POST":
+            self._send_json(405, {"error": "method not allowed"})
+            return
+
+        payload: dict = {}
+        try:
+            payload = self._read_json_body()
+            result = apply_feishu_channel_module(payload)
+            ok = result.get("status") in {"preview", "applied"}
+            body = dict(result)
+            if ok and result.get("status") != "preview":
+                body["summary"] = openclaw_summary()
+            record_manager_action(
+                {
+                    **self._request_meta(),
+                    "scope": "openclaw-config-feishu-channel-module",
+                    "profile": result.get("profile"),
+                    "dryRun": bool(result.get("dryRun")),
+                    "restartAfterSave": bool(result.get("restartAfterSave")),
+                    "target": result.get("target"),
+                    "ok": ok,
+                    "status": result.get("status"),
+                }
+            )
+            self._send_json(200 if ok else 400, body)
+        except Exception as exc:
+            record_manager_action(
+                {
+                    **self._request_meta(),
+                    "scope": "openclaw-config-feishu-channel-module",
+                    "profile": payload.get("profile"),
+                    "dryRun": payload.get("dryRun"),
+                    "restartAfterSave": payload.get("restartAfterSave"),
+                    "ok": False,
+                    "status": "failed",
+                    "error": str(exc),
+                }
+            )
+            self._send_json(400, {"status": "failed", "error": str(exc)})
 
     def _handle_openclaw_tencent_model_module(self):
         if self.command != "POST":
@@ -352,6 +423,117 @@ class ExecHandler(http.server.BaseHTTPRequestHandler):
                 }
             )
             self._send_json(400, {"status": "failed", "error": str(exc)})
+
+    def _handle_openclaw_feishu_qr_status(self, query_string: str):
+        if self.command != "GET":
+            self._send_json(405, {"error": "method not allowed"})
+            return
+        try:
+            params = urllib.parse.parse_qs(query_string)
+            profile = normalize_profile((params.get("profile") or ["default"])[0])
+            self._send_json(200, get_feishu_qr_session_status(profile, include_output=True))
+        except Exception as exc:
+            self._send_json(400, {"error": str(exc)})
+
+    def _handle_openclaw_feishu_qr_start(self):
+        if self.command != "POST":
+            self._send_json(405, {"error": "method not allowed"})
+            return
+        payload: dict = {}
+        try:
+            payload = self._read_json_body()
+            profile = normalize_profile(payload.get("profile"))
+            verbose = _coerce_bool_field(payload, "verbose", default=True)
+            result = start_feishu_qr_session(profile, verbose=verbose)
+            record_manager_action(
+                {
+                    **self._request_meta(),
+                    "scope": "openclaw-feishu-qr-start",
+                    "profile": profile,
+                    "verbose": verbose,
+                    "ok": True,
+                    "status": result.get("status"),
+                }
+            )
+            self._send_json(200, result)
+        except Exception as exc:
+            record_manager_action(
+                {
+                    **self._request_meta(),
+                    "scope": "openclaw-feishu-qr-start",
+                    "profile": payload.get("profile"),
+                    "ok": False,
+                    "error": str(exc),
+                }
+            )
+            self._send_json(400, {"error": str(exc)})
+
+    def _handle_openclaw_feishu_qr_input(self):
+        if self.command != "POST":
+            self._send_json(405, {"error": "method not allowed"})
+            return
+        payload: dict = {}
+        try:
+            payload = self._read_json_body()
+            profile = normalize_profile(payload.get("profile"))
+            input_value = payload.get("input")
+            if not isinstance(input_value, str) or not input_value:
+                raise ValueError("input 不能为空")
+            result = send_feishu_qr_input(profile, input_value)
+            record_manager_action(
+                {
+                    **self._request_meta(),
+                    "scope": "openclaw-feishu-qr-input",
+                    "profile": profile,
+                    "inputLength": len(input_value),
+                    "ok": True,
+                    "status": result.get("status"),
+                }
+            )
+            self._send_json(200, result)
+        except Exception as exc:
+            record_manager_action(
+                {
+                    **self._request_meta(),
+                    "scope": "openclaw-feishu-qr-input",
+                    "profile": payload.get("profile"),
+                    "ok": False,
+                    "error": str(exc),
+                }
+            )
+            self._send_json(400, {"error": str(exc)})
+
+    def _handle_openclaw_feishu_qr_stop(self):
+        if self.command != "POST":
+            self._send_json(405, {"error": "method not allowed"})
+            return
+        payload: dict = {}
+        try:
+            payload = self._read_json_body()
+            profile = normalize_profile(payload.get("profile"))
+            result = stop_feishu_qr_session(profile)
+            record_manager_action(
+                {
+                    **self._request_meta(),
+                    "scope": "openclaw-feishu-qr-stop",
+                    "profile": profile,
+                    "ok": True,
+                    "status": result.get("status"),
+                    "exitCode": result.get("exitCode"),
+                }
+            )
+            self._send_json(200, result)
+        except Exception as exc:
+            record_manager_action(
+                {
+                    **self._request_meta(),
+                    "scope": "openclaw-feishu-qr-stop",
+                    "profile": payload.get("profile"),
+                    "ok": False,
+                    "error": str(exc),
+                }
+            )
+            self._send_json(400, {"error": str(exc)})
 
     def _handle_openclaw_diagnostics(self):
         try:

@@ -457,6 +457,39 @@ body {
   overflow: auto;
 }
 
+.terminal-output {
+  margin: 0;
+  overflow: auto;
+  white-space: pre;
+  word-break: normal;
+  overflow-wrap: normal;
+  scrollbar-gutter: stable both-edges;
+}
+
+.qr-terminal-output {
+  background: #050608;
+  color: #f5f7fa;
+  border-color: #3a3d46;
+  padding: 10px 12px;
+  min-height: 380px;
+  max-height: min(74vh, 680px);
+  font-family: "DejaVu Sans Mono", "Liberation Mono", "JetBrains Mono", "Noto Sans Mono CJK SC", monospace;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0;
+  tab-size: 2;
+}
+
+.qr-terminal-output.is-placeholder {
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
 .section-gap { margin-top: 18px; }
 
 .section-head {
@@ -580,6 +613,60 @@ body {
 .model-module-result {
   min-height: 140px;
   max-height: 340px;
+}
+
+@media (max-width: 900px) {
+  .qr-terminal-output {
+    min-height: 280px;
+    max-height: 60vh;
+    font-size: 8px;
+    padding: 8px 10px;
+  }
+}
+
+.module-banner {
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.module-meta {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.session-control-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.session-input-row {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.session-input-row input {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+}
+
+.session-input-row input:focus {
+  border-color: var(--primary);
 }
 
 textarea.config-editor {
@@ -838,6 +925,57 @@ textarea.config-editor:focus {
     <div class="tab-panel" id="panel-config">
       <div class="card model-module-panel">
         <div class="section-head">
+          <h3>Feishu</h3>
+          <span class="hint">支持已有 appId/appSecret 注入，以及二维码登录向导</span>
+        </div>
+        <div class="model-module-grid">
+          <div class="model-module-field">
+            <label for="feishuAppId">App ID</label>
+            <input id="feishuAppId" type="text" placeholder="cli_..." oninput="updateFeishuModuleDraft()">
+          </div>
+          <div class="model-module-field">
+            <label for="feishuAppSecret">App Secret</label>
+            <input id="feishuAppSecret" type="password" placeholder="xxxx" oninput="updateFeishuModuleDraft()">
+          </div>
+        </div>
+        <div class="module-banner" id="feishuModuleHint">选择实例后可注入已有 Feishu 凭据，或启动 QR 向导。</div>
+        <div class="model-module-actions">
+          <div class="module-meta" id="feishuModuleMeta">-</div>
+          <div class="actions">
+            <button class="btn btn-ghost" id="feishuPreviewBtn" onclick="previewFeishuModule()">预览</button>
+            <button class="btn btn-primary" id="feishuApplyBtn" onclick="applyFeishuModule()">应用并重启</button>
+          </div>
+        </div>
+        <div class="code-block model-module-result" id="feishuModuleResult">选择实例后可预览 Feishu 注入结果。</div>
+
+        <div class="section-gap">
+          <div class="section-head">
+            <h3>Feishu QR 向导</h3>
+            <span class="hint">运行 openclaw channels login --channel feishu</span>
+          </div>
+          <div class="module-banner" id="feishuQrBanner">选择实例后可启动 Feishu QR 向导。</div>
+          <div class="model-module-actions">
+            <div class="session-control-row">
+              <button class="btn btn-primary" id="feishuQrStartBtn" onclick="startFeishuQrSession()">启动向导</button>
+              <button class="btn btn-ghost" id="feishuQrStopBtn" onclick="stopFeishuQrSession()">停止</button>
+              <button class="btn btn-ghost" id="feishuQrRefreshBtn" onclick="refreshFeishuQrSession()">刷新状态</button>
+            </div>
+            <div class="session-control-row">
+              <button class="btn btn-ghost" id="feishuQrUpBtn" onclick="sendFeishuQrKey('up')">↑</button>
+              <button class="btn btn-ghost" id="feishuQrDownBtn" onclick="sendFeishuQrKey('down')">↓</button>
+              <button class="btn btn-ghost" id="feishuQrEnterBtn" onclick="sendFeishuQrKey('enter')">Enter</button>
+              <button class="btn btn-ghost" id="feishuQrCtrlCBtn" onclick="sendFeishuQrKey('ctrl-c')">Ctrl+C</button>
+            </div>
+          </div>
+          <div class="session-input-row">
+            <input id="feishuQrTextInput" type="text" placeholder="发送自定义输入，然后按回车" onkeydown="if (event.key === 'Enter') sendFeishuQrText()">
+            <button class="btn btn-ghost" id="feishuQrSendBtn" onclick="sendFeishuQrText()">发送</button>
+          </div>
+          <pre class="code-block model-module-result terminal-output qr-terminal-output is-placeholder" id="feishuQrOutput">选择实例后可查看 Feishu QR 向导输出。</pre>
+        </div>
+      </div>
+      <div class="card model-module-panel">
+        <div class="section-head">
           <h3>Tencent Coding Plan</h3>
           <span class="hint">仅改 Tencent 模型包相关区块</span>
         </div>
@@ -857,8 +995,8 @@ textarea.config-editor:focus {
             <span>附带 probe</span>
           </label>
           <div class="actions">
-            <button class="btn btn-ghost" onclick="previewTencentModule()">预览</button>
-            <button class="btn btn-primary" onclick="applyTencentModule()">应用并重启</button>
+            <button class="btn btn-ghost" id="tencentPreviewBtn" onclick="previewTencentModule()">预览</button>
+            <button class="btn btn-primary" id="tencentApplyBtn" onclick="applyTencentModule()">应用并重启</button>
           </div>
         </div>
         <div class="code-block model-module-result" id="tencentModuleResult">选择实例后可预览 Tencent 模型包注入结果。</div>
@@ -866,9 +1004,9 @@ textarea.config-editor:focus {
       <div class="config-toolbar">
         <span class="meta" id="configMeta">等待加载</span>
         <div class="actions">
-          <button class="btn btn-ghost" onclick="reloadConfig()">重新读取</button>
-          <button class="btn btn-primary" onclick="saveConfig(false)">保存</button>
-          <button class="btn btn-primary" onclick="saveConfig(true)">保存并重启</button>
+          <button class="btn btn-ghost" id="reloadConfigBtn" onclick="reloadConfig()">重新读取</button>
+          <button class="btn btn-primary" id="saveConfigBtn" onclick="saveConfig(false)">保存</button>
+          <button class="btn btn-primary" id="saveRestartConfigBtn" onclick="saveConfig(true)">保存并重启</button>
         </div>
       </div>
       <textarea class="config-editor" id="configEditor" spellcheck="false"></textarea>
@@ -905,6 +1043,10 @@ const app = {
   selectedProfile: null,
   detailByProfile: {},
   configTextByProfile: {},
+  feishuModuleDraftByProfile: {},
+  feishuModuleResultByProfile: {},
+  feishuQrSessionByProfile: {},
+  feishuQrPollTimerByProfile: {},
   tencentModuleDraftByProfile: {},
   tencentModuleResultByProfile: {},
   activeTab: 'overview',
@@ -1006,6 +1148,10 @@ function renderContentHead() {
 
   const s = detail.summary;
   const r = detail.runtime;
+  const configMutationLocked = !!currentFeishuQrSession(s.profile)?.active;
+  const configMutationAttrs = configMutationLocked
+    ? ' disabled title="Feishu QR 会话运行中，当前不能执行会修改配置的操作"'
+    : '';
   name.textContent = s.profile;
 
   const cls = r.activeState === 'active' ? 'badge-running' :
@@ -1019,9 +1165,9 @@ function renderContentHead() {
     <button class="btn btn-primary" onclick="doAction('start')">启动</button>
     <button class="btn btn-ghost" onclick="doAction('restart')">重启</button>
     <button class="btn btn-ghost" onclick="doAction('stop')">停止</button>
-    <button class="btn btn-ghost" onclick="doAction('ensure')">ensure</button>
-    ${r.runtimeMode === 'docker' ? '<button class="btn btn-ghost" onclick="doctorRepair()">doctor</button>' : ''}
-    ${s.profile !== 'default' ? '<button class="btn btn-danger" onclick="deleteInstance(false)">删除</button>' : ''}
+    <button class="btn btn-ghost"${configMutationAttrs} onclick="doAction('ensure')">ensure</button>
+    ${r.runtimeMode === 'docker' ? `<button class="btn btn-ghost"${configMutationAttrs} onclick="doctorRepair()">doctor</button>` : ''}
+    ${s.profile !== 'default' ? `<button class="btn btn-danger"${configMutationAttrs} onclick="deleteInstance(false)">删除</button>` : ''}
   `;
 }
 
@@ -1072,6 +1218,8 @@ function renderDetail() {
 
   const s = detail.summary;
   const r = detail.runtime;
+  const session = currentFeishuQrSession(s.profile) || detail.feishuQrSession;
+  const feishuRuntime = currentFeishuRuntime(detail);
   const rows = [
     ['配置文件', s.configPath],
     ['State 目录', s.stateDir],
@@ -1083,6 +1231,9 @@ function renderDetail() {
     ['Tool Profile', s.toolProfile || '-'],
     ['Bind', s.bind || '-'],
     ['Feishu', s.feishu?.enabled ? 'enabled' : 'disabled'],
+    ['Feishu 插件', feishuRuntime?.plugin?.loaded ? 'loaded' : (feishuRuntime?.plugin?.status || '-')],
+    ['Feishu Ready', feishuRuntimeStatusLabel(feishuRuntime)],
+    ['Feishu QR', session?.active ? 'running' : (session?.status || 'idle')],
     ['版本', s.metaVersion || '-'],
     ['端口监听', (r.portOwners || []).length ? `${r.portOwners.length} socket` : '无'],
   ];
@@ -1122,6 +1273,82 @@ function ensureTencentModelOptions() {
   `).join('');
 }
 
+function currentFeishuQrSession(profile) {
+  if (!profile) return null;
+  return app.feishuQrSessionByProfile[profile] || null;
+}
+
+function currentFeishuRuntime(detail = currentDetail()) {
+  return detail?.feishuRuntime || null;
+}
+
+function feishuRuntimeStatusLabel(runtime) {
+  if (!runtime) return '-';
+  const status = runtime.status || 'unknown';
+  if (status === 'ready') return runtime.readyEvidence === 'logs' ? 'ready (logs)' : 'ready';
+  if (status === 'pending_login') return '等待扫码登录';
+  if (status === 'pending_restart') return '等待重启生效';
+  if (status === 'plugin_missing') return '插件未加载';
+  if (status === 'not_running') return '通道未运行';
+  if (status === 'running_unverified') return '运行中待校验';
+  if (status === 'runtime_down') return '运行态未启动';
+  if (status === 'disabled') return 'disabled';
+  return status;
+}
+
+function firstFeishuRuntimeIssue(runtime) {
+  if (!runtime) return '';
+  return runtime.issues?.[0] || runtime.channel?.lastError || runtime.channel?.error || runtime.plugin?.error || '';
+}
+
+function mergeFeishuQrSession(profile, snapshot) {
+  if (!profile || !snapshot) return null;
+  const previous = app.feishuQrSessionByProfile[profile] || {};
+  const merged = { ...previous, ...snapshot };
+  if (!Object.prototype.hasOwnProperty.call(snapshot, 'output') && previous.output) merged.output = previous.output;
+  app.feishuQrSessionByProfile[profile] = merged;
+  return merged;
+}
+
+function clearFeishuQrPoll(profile) {
+  const timer = app.feishuQrPollTimerByProfile[profile];
+  if (timer) {
+    clearTimeout(timer);
+    delete app.feishuQrPollTimerByProfile[profile];
+  }
+}
+
+function scheduleFeishuQrPoll(profile, delay = 2000) {
+  if (!profile) return;
+  clearFeishuQrPoll(profile);
+  app.feishuQrPollTimerByProfile[profile] = setTimeout(() => {
+    loadFeishuQrStatus(profile, { silent: true, autoRefreshOnExit: true });
+  }, delay);
+}
+
+function isProfileConfigLocked(profile) {
+  return !!currentFeishuQrSession(profile)?.active;
+}
+
+function activeFeishuSource(detail) {
+  const feishu = (((detail?.config || {}).channels || {}).feishu) || {};
+  const summary = detail?.summary?.feishu || {};
+  const accountMode = summary.accountMode || (typeof feishu.accounts === 'object' && feishu.accounts ? 'account' : 'top-level');
+  const accountId = summary.accountId || (typeof feishu.defaultAccount === 'string' && feishu.defaultAccount ? feishu.defaultAccount : 'default');
+  const account = accountMode === 'account' ? (((feishu.accounts || {})[accountId]) || {}) : feishu;
+  return { feishu, summary, accountMode, accountId, account };
+}
+
+function buildFeishuModuleDraft(detail) {
+  const source = activeFeishuSource(detail);
+  return {
+    appId: typeof source.account?.appId === 'string' ? source.account.appId : '',
+    appSecret: typeof source.account?.appSecret === 'string' ? source.account.appSecret : '',
+    accountId: source.accountMode === 'account' ? source.accountId : '',
+    accountMode: source.accountMode,
+  };
+}
+
 function buildTencentModuleDraft(detail) {
   const config = detail?.config || {};
   const provider = (((config.models || {}).providers || {})['tencent-coding-plan']) || {};
@@ -1138,7 +1365,20 @@ function storeProfileDetail(detail) {
   if (!profile) return;
   app.detailByProfile[profile] = detail;
   app.configTextByProfile[profile] = JSON.stringify(detail.config, null, 2);
+  app.feishuModuleDraftByProfile[profile] = buildFeishuModuleDraft(detail);
   app.tencentModuleDraftByProfile[profile] = buildTencentModuleDraft(detail);
+  const session = mergeFeishuQrSession(profile, detail.feishuQrSession || { profile, active: false, status: 'idle' });
+  if (session?.active || session?.postSyncStatus === 'running') scheduleFeishuQrPoll(profile, session?.active ? 2000 : 800);
+  else clearFeishuQrPoll(profile);
+}
+
+function ensureFeishuModuleDraft(profile) {
+  if (!profile) return null;
+  const detail = app.detailByProfile[profile];
+  if (!app.feishuModuleDraftByProfile[profile]) {
+    app.feishuModuleDraftByProfile[profile] = buildFeishuModuleDraft(detail);
+  }
+  return app.feishuModuleDraftByProfile[profile];
 }
 
 function ensureTencentModuleDraft(profile) {
@@ -1148,6 +1388,54 @@ function ensureTencentModuleDraft(profile) {
     app.tencentModuleDraftByProfile[profile] = buildTencentModuleDraft(detail);
   }
   return app.tencentModuleDraftByProfile[profile];
+}
+
+function formatFeishuModuleResult(result) {
+  if (!result) return '选择实例后可预览 Feishu 注入结果。';
+  const runtime = result.feishuRuntime || result.runtimeSync?.feishuRuntime || null;
+  const lines = [
+    `status: ${result.status || '-'}`,
+    `profile: ${result.profile || '-'}`,
+  ];
+  if (result.target?.mode) {
+    const targetLabel = result.target.mode === 'account'
+      ? `accounts.${result.target.accountId || 'default'}`
+      : 'channels.feishu';
+    lines.push(`target: ${targetLabel}`);
+  }
+  if (result.error) lines.push(`error: ${result.error}`);
+  if (result.runtimeWarning) lines.push(`runtimeWarning: ${result.runtimeWarning}`);
+  if (result.validate) lines.push(`validate: rc=${result.validate.returncode}`);
+  if (result.restart) lines.push(`restart: rc=${result.restart.returncode}`);
+  if (runtime) {
+    lines.push(`runtime: ${feishuRuntimeStatusLabel(runtime)}${runtime.readyEvidence ? ` · ${runtime.readyEvidence}` : ''}`);
+    lines.push(`plugin: ${runtime.plugin?.loaded ? 'loaded' : (runtime.plugin?.status || '-')}`);
+    const configured = runtime.channel?.configured === true ? 'yes' : runtime.channel?.configured === false ? 'no' : '-';
+    const running = runtime.channel?.running === true ? 'yes' : runtime.channel?.running === false ? 'no' : '-';
+    const probe = runtime.channel?.probeOk === true ? 'ok' : runtime.channel?.probeOk === false ? 'fail' : '-';
+    lines.push(`channel: configured=${configured} running=${running} probe=${probe}`);
+    const runtimeActions = result.runtimeSync?.actions || [];
+    if (runtimeActions.length) {
+      lines.push('');
+      lines.push('runtimeActions:');
+      runtimeActions.forEach(action => lines.push(`- ${action}`));
+    }
+    if (Array.isArray(runtime.issues) && runtime.issues.length) {
+      lines.push('');
+      lines.push('runtimeIssues:');
+      runtime.issues.forEach(issue => lines.push(`- ${issue}`));
+    }
+  }
+  if (Array.isArray(result.changedPaths) && result.changedPaths.length) {
+    lines.push('');
+    lines.push('changedPaths:');
+    result.changedPaths.forEach(path => lines.push(`- ${path}`));
+  }
+  if (result.preview) {
+    lines.push('');
+    lines.push(JSON.stringify(result.preview, null, 2));
+  }
+  return lines.join('\n');
 }
 
 function formatTencentModuleResult(result) {
@@ -1180,14 +1468,130 @@ function formatTencentModuleResult(result) {
   return lines.join('\n');
 }
 
+function formatFeishuQrBanner(detail, session) {
+  if (!detail) return '选择实例后可启动 Feishu QR 向导。';
+  const source = activeFeishuSource(detail);
+  const runtime = currentFeishuRuntime(detail);
+  const targetLabel = source.accountMode === 'account'
+    ? `accounts.${source.accountId || 'default'}`
+    : 'channels.feishu';
+  const parts = [`当前注入目标：${targetLabel}`];
+  if (detail.summary?.feishu?.usesSecretProvider) {
+    parts.push('当前 appSecret 来自 secret provider，输入框不会回显旧值。');
+  }
+  if (session?.active) {
+    parts.push('QR 会话运行中，配置写入已锁定。');
+  } else if (session?.postSyncStatus === 'running') {
+    parts.push('二维码登录已结束，正在同步运行态。');
+  } else if (runtime?.ready) {
+    parts.push('运行态已确认加载 Feishu 插件，channel 已启动并 ready。');
+  } else if (runtime?.status === 'pending_login') {
+    parts.push('插件已同步到运行态，下一步完成二维码登录。');
+  } else if (firstFeishuRuntimeIssue(runtime)) {
+    parts.push(`运行态阻塞：${firstFeishuRuntimeIssue(runtime)}`);
+  } else if (session?.exitCode === 0) {
+    parts.push('QR 会话已结束；可重新读取配置并按需重启网关。');
+  } else if (session?.exitCode !== null && session?.exitCode !== undefined) {
+    parts.push(`QR 会话已结束，exit=${session.exitCode}。`);
+  } else {
+    parts.push('可直接注入已有凭据，或启动向导生成/重连 Feishu 机器人。');
+  }
+  return parts.join(' ');
+}
+
+function renderFeishuModulePanel() {
+  const detail = currentDetail();
+  const appIdInput = document.getElementById('feishuAppId');
+  const appSecretInput = document.getElementById('feishuAppSecret');
+  const hint = document.getElementById('feishuModuleHint');
+  const meta = document.getElementById('feishuModuleMeta');
+  const resultBox = document.getElementById('feishuModuleResult');
+  const previewBtn = document.getElementById('feishuPreviewBtn');
+  const applyBtn = document.getElementById('feishuApplyBtn');
+  const qrBanner = document.getElementById('feishuQrBanner');
+  const qrOutput = document.getElementById('feishuQrOutput');
+  const qrTextInput = document.getElementById('feishuQrTextInput');
+  const qrStartBtn = document.getElementById('feishuQrStartBtn');
+  const qrStopBtn = document.getElementById('feishuQrStopBtn');
+  const qrRefreshBtn = document.getElementById('feishuQrRefreshBtn');
+  const qrUpBtn = document.getElementById('feishuQrUpBtn');
+  const qrDownBtn = document.getElementById('feishuQrDownBtn');
+  const qrEnterBtn = document.getElementById('feishuQrEnterBtn');
+  const qrCtrlCBtn = document.getElementById('feishuQrCtrlCBtn');
+  const qrSendBtn = document.getElementById('feishuQrSendBtn');
+  if (!appIdInput || !appSecretInput || !hint || !meta || !resultBox || !previewBtn || !applyBtn || !qrBanner || !qrOutput) return;
+
+  if (!detail) {
+    appIdInput.value = '';
+    appSecretInput.value = '';
+    appIdInput.disabled = true;
+    appSecretInput.disabled = true;
+    previewBtn.disabled = true;
+    applyBtn.disabled = true;
+    resultBox.textContent = '选择实例后可预览 Feishu 注入结果。';
+    hint.textContent = '选择实例后可注入已有 Feishu 凭据，或启动 QR 向导。';
+    meta.textContent = '-';
+    qrBanner.textContent = '选择实例后可启动 Feishu QR 向导。';
+    qrOutput.textContent = '选择实例后可查看 Feishu QR 向导输出。';
+    qrOutput.classList.add('is-placeholder');
+    [qrTextInput, qrStartBtn, qrStopBtn, qrRefreshBtn, qrUpBtn, qrDownBtn, qrEnterBtn, qrCtrlCBtn, qrSendBtn].forEach(el => {
+      if (el) el.disabled = true;
+    });
+    return;
+  }
+
+  const profile = detail.summary.profile;
+  const draft = ensureFeishuModuleDraft(profile);
+  const source = activeFeishuSource(detail);
+  const session = currentFeishuQrSession(profile);
+  const runtime = currentFeishuRuntime(detail);
+  const locked = !!session?.active;
+  const targetLabel = source.accountMode === 'account'
+    ? `accounts.${source.accountId || 'default'}`
+    : 'channels.feishu';
+
+  appIdInput.disabled = locked;
+  appSecretInput.disabled = locked;
+  previewBtn.disabled = locked;
+  applyBtn.disabled = locked;
+  appIdInput.value = draft?.appId || '';
+  appSecretInput.value = draft?.appSecret || '';
+  hint.textContent = formatFeishuQrBanner(detail, session);
+  meta.textContent = `target=${targetLabel}${source.summary?.defaultAccount ? ` · defaultAccount=${source.summary.defaultAccount}` : ''}`;
+  resultBox.textContent = formatFeishuModuleResult(app.feishuModuleResultByProfile[profile]);
+
+  qrBanner.textContent = session?.active
+    ? `QR 向导运行中 · pid=${session.pid || '-'} · started=${session.startedAt || '-'}`
+    : session?.postSyncStatus === 'running'
+      ? 'QR 向导已结束，正在同步运行态…'
+    : session?.exitCode !== null && session?.exitCode !== undefined
+      ? `QR 向导已结束 · exit=${session.exitCode} · ended=${session.endedAt || '-'}${runtime ? ` · ${feishuRuntimeStatusLabel(runtime)}` : ''}`
+      : '向导会在当前 profile 下运行，可用方向键 / Enter / 文本输入驱动交互。';
+  const qrText = session?.output || '启动后会在这里显示 Feishu QR 向导输出。';
+  qrOutput.textContent = qrText;
+  qrOutput.classList.toggle('is-placeholder', !session?.output);
+  if (qrTextInput) {
+    qrTextInput.disabled = !session?.active;
+    if (!session?.active) qrTextInput.value = '';
+  }
+  if (qrStartBtn) qrStartBtn.disabled = !!session?.active;
+  if (qrStopBtn) qrStopBtn.disabled = !session?.active;
+  if (qrRefreshBtn) qrRefreshBtn.disabled = false;
+  [qrUpBtn, qrDownBtn, qrEnterBtn, qrCtrlCBtn, qrSendBtn].forEach(el => {
+    if (el) el.disabled = !session?.active;
+  });
+}
+
 function renderTencentModulePanel() {
   ensureTencentModelOptions();
   const detail = currentDetail();
   const apiKeyInput = document.getElementById('tencentApiKey');
   const modelSelect = document.getElementById('tencentPrimaryModel');
   const probeToggle = document.getElementById('tencentProbeToggle');
+  const previewBtn = document.getElementById('tencentPreviewBtn');
+  const applyBtn = document.getElementById('tencentApplyBtn');
   const resultBox = document.getElementById('tencentModuleResult');
-  if (!apiKeyInput || !modelSelect || !probeToggle || !resultBox) return;
+  if (!apiKeyInput || !modelSelect || !probeToggle || !previewBtn || !applyBtn || !resultBox) return;
 
   if (!detail) {
     apiKeyInput.value = '';
@@ -1196,18 +1600,24 @@ function renderTencentModulePanel() {
     apiKeyInput.disabled = true;
     modelSelect.disabled = true;
     probeToggle.disabled = true;
+    previewBtn.disabled = true;
+    applyBtn.disabled = true;
     resultBox.textContent = '选择实例后可预览 Tencent 模型包注入结果。';
     return;
   }
 
-  const draft = ensureTencentModuleDraft(detail.summary.profile);
-  apiKeyInput.disabled = false;
-  modelSelect.disabled = false;
-  probeToggle.disabled = false;
+  const profile = detail.summary.profile;
+  const draft = ensureTencentModuleDraft(profile);
+  const locked = isProfileConfigLocked(profile);
+  apiKeyInput.disabled = locked;
+  modelSelect.disabled = locked;
+  probeToggle.disabled = locked;
+  previewBtn.disabled = locked;
+  applyBtn.disabled = locked;
   apiKeyInput.value = draft?.apiKey || '';
   modelSelect.value = draft?.primaryModel || TENCENT_PRIMARY_MODELS[0];
   probeToggle.checked = draft?.probeAfterApply !== false;
-  resultBox.textContent = formatTencentModuleResult(app.tencentModuleResultByProfile[detail.summary.profile]);
+  resultBox.textContent = formatTencentModuleResult(app.tencentModuleResultByProfile[profile]);
 }
 
 // ===== Render: Config =====
@@ -1215,14 +1625,32 @@ function renderConfig() {
   const detail = currentDetail();
   const meta = document.getElementById('configMeta');
   const editor = document.getElementById('configEditor');
+  const reloadBtn = document.getElementById('reloadConfigBtn');
+  const saveBtn = document.getElementById('saveConfigBtn');
+  const saveRestartBtn = document.getElementById('saveRestartConfigBtn');
   if (!detail) {
     meta.textContent = '-';
     editor.value = '';
+    editor.readOnly = true;
+    if (reloadBtn) reloadBtn.disabled = true;
+    if (saveBtn) saveBtn.disabled = true;
+    if (saveRestartBtn) saveRestartBtn.disabled = true;
+    renderFeishuModulePanel();
     renderTencentModulePanel();
     return;
   }
-  meta.textContent = detail.paths.configPath;
-  editor.value = app.configTextByProfile[detail.summary.profile] || JSON.stringify(detail.config, null, 2);
+
+  const profile = detail.summary.profile;
+  const locked = isProfileConfigLocked(profile);
+  meta.textContent = locked
+    ? `${detail.paths.configPath} · Feishu QR 会话运行中，配置写入已锁定`
+    : detail.paths.configPath;
+  editor.value = app.configTextByProfile[profile] || JSON.stringify(detail.config, null, 2);
+  editor.readOnly = locked;
+  if (reloadBtn) reloadBtn.disabled = false;
+  if (saveBtn) saveBtn.disabled = locked;
+  if (saveRestartBtn) saveRestartBtn.disabled = locked;
+  renderFeishuModulePanel();
   renderTencentModulePanel();
 }
 
@@ -1432,8 +1860,14 @@ async function deleteInstance(removeState) {
   try {
     await apiPost('/api/openclaw/action', { action: 'delete', profile: app.selectedProfile, removeStateDir: removeState });
     showToast(`${app.selectedProfile} 已删除`);
+    clearFeishuQrPoll(app.selectedProfile);
     delete app.detailByProfile[app.selectedProfile];
     delete app.configTextByProfile[app.selectedProfile];
+    delete app.feishuModuleDraftByProfile[app.selectedProfile];
+    delete app.feishuModuleResultByProfile[app.selectedProfile];
+    delete app.feishuQrSessionByProfile[app.selectedProfile];
+    delete app.tencentModuleDraftByProfile[app.selectedProfile];
+    delete app.tencentModuleResultByProfile[app.selectedProfile];
     app.selectedProfile = null;
     await refreshAll();
   } catch (e) {
@@ -1470,6 +1904,10 @@ async function reloadConfig() {
 
 async function saveConfig(restart) {
   if (!app.selectedProfile) return;
+  if (isProfileConfigLocked(app.selectedProfile)) {
+    showToast('Feishu QR 会话运行中，当前不能保存配置', 'warn');
+    return;
+  }
   let config;
   try { config = JSON.parse(document.getElementById('configEditor').value); }
   catch (e) { showToast(`JSON 错误: ${e.message}`, 'error'); return; }
@@ -1481,6 +1919,175 @@ async function saveConfig(restart) {
   } catch (e) {
     showToast(`保存失败: ${e.message}`, 'error');
   }
+}
+
+function updateFeishuModuleDraft() {
+  if (!app.selectedProfile) return;
+  const draft = ensureFeishuModuleDraft(app.selectedProfile);
+  if (!draft) return;
+  draft.appId = document.getElementById('feishuAppId')?.value || '';
+  draft.appSecret = document.getElementById('feishuAppSecret')?.value || '';
+}
+
+function currentFeishuModulePayload(options) {
+  if (!app.selectedProfile) return null;
+  updateFeishuModuleDraft();
+  const draft = ensureFeishuModuleDraft(app.selectedProfile);
+  if (!draft) return null;
+  const payload = {
+    profile: app.selectedProfile,
+    appId: draft.appId,
+    appSecret: draft.appSecret,
+    restartAfterSave: !!options.restartAfterSave,
+    dryRun: !!options.dryRun,
+  };
+  if (draft.accountMode === 'account' && draft.accountId) {
+    payload.accountId = draft.accountId;
+  }
+  return payload;
+}
+
+async function previewFeishuModule() {
+  if (!app.selectedProfile) { showToast('先选择实例', 'warn'); return; }
+  if (isProfileConfigLocked(app.selectedProfile)) { showToast('Feishu QR 会话运行中', 'warn'); return; }
+  const payload = currentFeishuModulePayload({ dryRun: true, restartAfterSave: false });
+  try {
+    const result = await apiPost('/api/openclaw/config/feishu-channel', payload);
+    app.feishuModuleResultByProfile[app.selectedProfile] = result;
+    renderFeishuModulePanel();
+    showToast('Feishu 预览完成');
+  } catch (e) {
+    if (e.data?.status === 'failed') {
+      app.feishuModuleResultByProfile[app.selectedProfile] = e.data;
+      renderFeishuModulePanel();
+    }
+    showToast(`Feishu 预览失败: ${e.message}`, 'error');
+  }
+}
+
+async function applyFeishuModule() {
+  if (!app.selectedProfile) { showToast('先选择实例', 'warn'); return; }
+  if (isProfileConfigLocked(app.selectedProfile)) { showToast('Feishu QR 会话运行中', 'warn'); return; }
+  const payload = currentFeishuModulePayload({ dryRun: false, restartAfterSave: true });
+  try {
+    const result = await apiPost('/api/openclaw/config/feishu-channel', payload);
+    app.feishuModuleResultByProfile[app.selectedProfile] = result;
+    await refreshAll(true);
+    renderFeishuModulePanel();
+    const runtime = result.feishuRuntime || result.runtimeSync?.feishuRuntime;
+    const issue = firstFeishuRuntimeIssue(runtime);
+    if (runtime?.ready) showToast(`${app.selectedProfile} 的 Feishu 配置已应用，运行态已 ready`);
+    else if (runtime?.status === 'pending_login') showToast(`${app.selectedProfile} 的 Feishu 配置已应用，插件已同步，下一步扫码登录`);
+    else if (issue) showToast(`Feishu 配置已保存，但运行态阻塞: ${issue}`, 'warn');
+    else showToast(`${app.selectedProfile} 的 Feishu 配置已应用并重启`);
+  } catch (e) {
+    if (e.data?.status === 'failed') {
+      app.feishuModuleResultByProfile[app.selectedProfile] = e.data;
+      renderFeishuModulePanel();
+    }
+    showToast(`Feishu 应用失败: ${e.message}`, 'error');
+  }
+}
+
+async function loadFeishuQrStatus(profile = app.selectedProfile, options = {}) {
+  if (!profile) return null;
+  try {
+    const previous = currentFeishuQrSession(profile);
+    const status = await apiGet(`/api/openclaw/feishu/qr/status?profile=${encodeURIComponent(profile)}`);
+    mergeFeishuQrSession(profile, status);
+    if (status.active || status.postSyncStatus === 'running') scheduleFeishuQrPoll(profile, status.active ? 2000 : 800);
+    else clearFeishuQrPoll(profile);
+    if (profile === app.selectedProfile) {
+      renderContentHead();
+      renderDetail();
+      renderConfig();
+    }
+    const justFinishedSession = previous?.active && !status.active && status.postSyncStatus !== 'running';
+    const justFinishedRuntimeSync = previous?.postSyncStatus === 'running' && status.postSyncStatus !== 'running';
+    if (options.autoRefreshOnExit && (justFinishedSession || justFinishedRuntimeSync)) {
+      await refreshAll(true);
+      if (!options.silent) {
+        const runtime = currentDetail()?.feishuRuntime;
+        const issue = firstFeishuRuntimeIssue(runtime);
+        if (runtime?.ready) showToast('Feishu 登录完成，运行态已 ready');
+        else if (issue) showToast(`Feishu 登录已保存，但运行态阻塞: ${issue}`, 'warn');
+        else showToast('Feishu QR 会话已结束');
+      }
+    }
+    return status;
+  } catch (e) {
+    if (!options.silent) showToast(`Feishu QR 状态失败: ${e.message}`, 'error');
+    return null;
+  }
+}
+
+async function refreshFeishuQrSession() {
+  if (!app.selectedProfile) { showToast('先选择实例', 'warn'); return; }
+  const status = await loadFeishuQrStatus(app.selectedProfile, { silent: true, autoRefreshOnExit: true });
+  if (status) showToast(status.active ? 'Feishu QR 会话仍在运行' : 'Feishu QR 状态已刷新');
+}
+
+async function startFeishuQrSession() {
+  if (!app.selectedProfile) { showToast('先选择实例', 'warn'); return; }
+  try {
+    const result = await apiPost('/api/openclaw/feishu/qr/start', { profile: app.selectedProfile, verbose: true });
+    mergeFeishuQrSession(app.selectedProfile, result);
+    renderContentHead();
+    renderDetail();
+    renderConfig();
+    scheduleFeishuQrPoll(app.selectedProfile, 1200);
+    showToast('Feishu QR 向导已启动');
+  } catch (e) {
+    showToast(`Feishu QR 启动失败: ${e.message}`, 'error');
+  }
+}
+
+async function stopFeishuQrSession() {
+  if (!app.selectedProfile) { showToast('先选择实例', 'warn'); return; }
+  try {
+    const result = await apiPost('/api/openclaw/feishu/qr/stop', { profile: app.selectedProfile });
+    mergeFeishuQrSession(app.selectedProfile, result);
+    clearFeishuQrPoll(app.selectedProfile);
+    await refreshAll(true);
+    showToast('Feishu QR 会话已停止');
+  } catch (e) {
+    showToast(`Feishu QR 停止失败: ${e.message}`, 'error');
+  }
+}
+
+function feishuQrKeyChars(key) {
+  if (key === 'up') return '\u001b[A';
+  if (key === 'down') return '\u001b[B';
+  if (key === 'enter') return '\r';
+  if (key === 'ctrl-c') return '\u0003';
+  return '';
+}
+
+async function sendFeishuQrRawInput(inputValue, successText) {
+  if (!app.selectedProfile) { showToast('先选择实例', 'warn'); return; }
+  if (!currentFeishuQrSession(app.selectedProfile)?.active) { showToast('Feishu QR 会话未运行', 'warn'); return; }
+  try {
+    const result = await apiPost('/api/openclaw/feishu/qr/input', { profile: app.selectedProfile, input: inputValue });
+    mergeFeishuQrSession(app.selectedProfile, result);
+    renderConfig();
+    if (successText) showToast(successText);
+  } catch (e) {
+    showToast(`Feishu QR 输入失败: ${e.message}`, 'error');
+  }
+}
+
+async function sendFeishuQrKey(key) {
+  const chars = feishuQrKeyChars(key);
+  if (!chars) return;
+  await sendFeishuQrRawInput(chars, `已发送 ${key}`);
+}
+
+async function sendFeishuQrText() {
+  const input = document.getElementById('feishuQrTextInput');
+  const value = input?.value || '';
+  if (!value) { showToast('先输入内容', 'warn'); return; }
+  await sendFeishuQrRawInput(value + '\r', '已发送输入');
+  if (input) input.value = '';
 }
 
 function updateTencentModuleDraft() {
@@ -1509,6 +2116,7 @@ function currentTencentModulePayload(options) {
 
 async function previewTencentModule() {
   if (!app.selectedProfile) { showToast('先选择实例', 'warn'); return; }
+  if (isProfileConfigLocked(app.selectedProfile)) { showToast('Feishu QR 会话运行中', 'warn'); return; }
   const payload = currentTencentModulePayload({ dryRun: true, restartAfterSave: false });
   try {
     const result = await apiPost('/api/openclaw/config/tencent-coding-plan', payload);
@@ -1526,6 +2134,7 @@ async function previewTencentModule() {
 
 async function applyTencentModule() {
   if (!app.selectedProfile) { showToast('先选择实例', 'warn'); return; }
+  if (isProfileConfigLocked(app.selectedProfile)) { showToast('Feishu QR 会话运行中', 'warn'); return; }
   const payload = currentTencentModulePayload({ dryRun: false, restartAfterSave: true });
   try {
     const result = await apiPost('/api/openclaw/config/tencent-coding-plan', payload);

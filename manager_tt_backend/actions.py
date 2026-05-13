@@ -28,6 +28,15 @@ from .docker_managed import (
     docker_control_script_path_for_profile,
     teardown_docker_runtime,
 )
+from .feishu_modules import (
+    FEISHU_CHANNEL_ID,
+    apply_feishu_channel_package,
+    extract_feishu_channel_fragment,
+    feishu_changed_paths,
+    summarize_feishu_channel,
+)
+from .feishu_runtime import config_requests_feishu, ensure_feishu_runtime, gather_feishu_runtime_status
+from .feishu_qr_sessions import ensure_feishu_qr_session_unlocked
 from .host_managed import create_instance_via_host_manager, ensure_instance_via_host_manager
 from .instances import (
     find_docker_session_host_path_refs,
@@ -105,11 +114,14 @@ def create_instance(payload: dict) -> dict:
 
 
 def ensure_instance(payload: dict) -> dict:
+    profile = normalize_profile(payload.get("profile"))
+    ensure_feishu_qr_session_unlocked(profile, scope="执行 ensure")
     return ensure_instance_via_host_manager(payload)
 
 
 def doctor_repair_instance(payload: dict) -> dict:
     profile = normalize_profile(payload.get("profile"))
+    ensure_feishu_qr_session_unlocked(profile, scope="执行 doctor repair")
     detail_before = read_instance(profile)
     summary = detail_before["summary"]
     runtime = detail_before["runtime"]
@@ -176,6 +188,10 @@ def doctor_repair_instance(payload: dict) -> dict:
             timeout_ms=20000,
         )
         detail_after = read_instance(profile)
+        feishu_runtime_sync = None
+        if restart_result.returncode == 0 and config_requests_feishu(summary.get("feishu") or {}):
+            feishu_runtime_sync = ensure_feishu_runtime(profile, restart_gateway=True)
+            actions.extend(feishu_runtime_sync.get("actions") or [])
         return {
             "stdout": restart_result.stdout,
             "stderr": restart_result.stderr,
@@ -186,6 +202,8 @@ def doctor_repair_instance(payload: dict) -> dict:
             "composePs": compose_ps.stdout or compose_ps.stderr,
             "detailBefore": detail_before,
             "detailAfter": detail_after,
+            "feishuRuntimeSync": feishu_runtime_sync,
+            "feishuRuntime": (feishu_runtime_sync or {}).get("feishuRuntime"),
         }
 
     ensure_payload = {"profile": profile}
@@ -194,6 +212,10 @@ def doctor_repair_instance(payload: dict) -> dict:
     result = ensure_instance(ensure_payload)
     actions.append("已执行 ensure 恢复默认托管形态")
     detail_after = read_instance(profile)
+    feishu_runtime_sync = None
+    if result.get("returncode") == 0 and config_requests_feishu(summary.get("feishu") or {}):
+        feishu_runtime_sync = ensure_feishu_runtime(profile, restart_gateway=True)
+        actions.extend(feishu_runtime_sync.get("actions") or [])
     return {
         **result,
         "profile": profile,
@@ -201,6 +223,8 @@ def doctor_repair_instance(payload: dict) -> dict:
         "backupPaths": backup_paths,
         "detailBefore": detail_before,
         "detailAfter": detail_after,
+        "feishuRuntimeSync": feishu_runtime_sync,
+        "feishuRuntime": (feishu_runtime_sync or {}).get("feishuRuntime"),
     }
 
 
@@ -271,7 +295,8 @@ def delete_instance(payload: dict) -> dict:
     if profile == "default":
         raise ValueError("默认实例不允许删除")
 
-    remove_state = bool(payload.get("removeStateDir", False))
+    ensure_feishu_qr_session_unlocked(profile, scope="删除实例")
+    remove_state = _coerce_bool_field(payload, "removeStateDir")
     service_name = service_name_for_profile(profile)
     state_dir = state_dir_for_profile(profile)
     config_path = config_path_for_profile(profile)
@@ -360,7 +385,8 @@ def perform_instance_action(payload: dict) -> dict:
     if action == "ensure":
         profile = normalize_profile(payload.get("profile"))
         runtime = read_instance(profile)["runtime"]
-        if runtime.get("runtimeMode") == "docker" and not payload.get("forceHostManaged"):
+        force_host_managed = _coerce_bool_field(payload, "forceHostManaged")
+        if runtime.get("runtimeMode") == "docker" and not force_host_managed:
             return doctor_repair_instance({"profile": profile})
         return ensure_instance(payload)
     if action == "repair-all":
@@ -410,6 +436,28 @@ def _coerce_bool_field(payload: dict, key: str, *, default: bool = False) -> boo
     raise ValueError(f"{key} 必须是布尔值")
 
 
+def _persist_validated_profile_config(profile: str, merged_config: dict) -> dict:
+    path = config_path_for_profile(profile)
+    if not path.exists():
+        raise FileNotFoundError(f"配置文件不存在: {path}")
+
+    original_bytes = path.read_bytes()
+    backup = backup_file(path)
+    write_json(path, merged_config)
+    validate_result = _validate_profile_config(profile)
+    rollback_performed = False
+    if validate_result["returncode"] != 0:
+        path.write_bytes(original_bytes)
+        rollback_performed = True
+    return {
+        "configPath": str(path),
+        "backupPath": str(backup) if backup else None,
+        "validate": validate_result,
+        "writePerformed": True,
+        "rollbackPerformed": rollback_performed,
+    }
+
+
 def apply_tencent_model_module(payload: dict) -> dict:
     if not isinstance(payload, dict):
         raise ValueError("payload 必须是对象")
@@ -423,6 +471,8 @@ def apply_tencent_model_module(payload: dict) -> dict:
     restart_after_save = _coerce_bool_field(payload, "restartAfterSave")
     probe_after_apply = _coerce_bool_field(payload, "probeAfterApply")
     dry_run = _coerce_bool_field(payload, "dryRun")
+    if not dry_run:
+        ensure_feishu_qr_session_unlocked(profile, scope="修改配置")
 
     path = config_path_for_profile(profile)
     if not path.exists():
@@ -452,18 +502,9 @@ def apply_tencent_model_module(payload: dict) -> dict:
             result["probe"] = probe_tencent_model_package(api_key, primary_model)
         return result
 
-    original_bytes = path.read_bytes()
-    backup = backup_file(path)
-    result["backupPath"] = str(backup) if backup else None
-    write_json(path, merged_config)
-    result["writePerformed"] = True
-
-    validate_result = _validate_profile_config(profile)
-    result["validate"] = validate_result
-    if validate_result["returncode"] != 0:
-        path.write_bytes(original_bytes)
+    result.update(_persist_validated_profile_config(profile, merged_config))
+    if result["validate"]["returncode"] != 0:
         result["status"] = "failed"
-        result["rollbackPerformed"] = True
         result["error"] = "配置校验失败，已回滚"
         return result
 
@@ -486,8 +527,83 @@ def apply_tencent_model_module(payload: dict) -> dict:
     return result
 
 
+def apply_feishu_channel_module(payload: dict) -> dict:
+    if not isinstance(payload, dict):
+        raise ValueError("payload 必须是对象")
+
+    profile = normalize_profile(payload.get("profile"))
+    app_id_value = payload.get("appId")
+    app_secret_value = payload.get("appSecret")
+    if not isinstance(app_id_value, str) or not app_id_value.strip():
+        raise ValueError("appId 不能为空")
+    if not isinstance(app_secret_value, str) or not app_secret_value.strip():
+        raise ValueError("appSecret 不能为空")
+    account_id_value = payload.get("accountId")
+    if account_id_value is not None and not isinstance(account_id_value, str):
+        raise ValueError("accountId 必须是字符串")
+
+    restart_after_save = _coerce_bool_field(payload, "restartAfterSave")
+    dry_run = _coerce_bool_field(payload, "dryRun")
+    if not dry_run:
+        ensure_feishu_qr_session_unlocked(profile, scope="修改 Feishu 配置")
+
+    path = config_path_for_profile(profile)
+    if not path.exists():
+        raise FileNotFoundError(f"配置文件不存在: {path}")
+
+    current_config = load_json(path)
+    merged_config, target = apply_feishu_channel_package(current_config, app_id_value, app_secret_value, account_id_value)
+    preview_fragment = extract_feishu_channel_fragment(merged_config, mask_app_secret=True, target=target)
+    result = {
+        "performedAt": utc_now_iso(),
+        "profile": profile,
+        "module": FEISHU_CHANNEL_ID,
+        "dryRun": dry_run,
+        "restartAfterSave": restart_after_save,
+        "writePerformed": False,
+        "rollbackPerformed": False,
+        "configPath": str(path),
+        "changedPaths": feishu_changed_paths(target),
+        "target": target,
+        "preview": preview_fragment,
+    }
+
+    if dry_run:
+        result["status"] = "preview"
+        return result
+
+    result.update(_persist_validated_profile_config(profile, merged_config))
+    if result["validate"]["returncode"] != 0:
+        result["status"] = "failed"
+        result["error"] = "配置校验失败，已回滚"
+        return result
+
+    result["status"] = "applied"
+    try:
+        runtime_sync = ensure_feishu_runtime(profile, restart_gateway=restart_after_save)
+        result["runtimeSync"] = runtime_sync
+        result["feishuRuntime"] = runtime_sync.get("feishuRuntime")
+        if runtime_sync.get("restart"):
+            result["restart"] = runtime_sync["restart"]
+        if runtime_sync.get("error"):
+            result["runtimeWarning"] = runtime_sync["error"]
+    except Exception as exc:
+        result["runtimeSync"] = {
+            "performedAt": utc_now_iso(),
+            "profile": profile,
+            "status": "failed",
+            "error": str(exc),
+            "actions": [],
+        }
+        result["runtimeWarning"] = str(exc)
+        result["feishuRuntime"] = gather_feishu_runtime_status(profile)
+    return result
+
+
 def save_config(payload: dict) -> dict:
     profile = normalize_profile(payload.get("profile"))
+    ensure_feishu_qr_session_unlocked(profile, scope="保存配置")
+    restart_after_save = _coerce_bool_field(payload, "restartAfterSave")
     config = payload.get("config")
     if not isinstance(config, dict):
         raise ValueError("config 必须是对象")
@@ -496,25 +612,29 @@ def save_config(payload: dict) -> dict:
     if not path.exists():
         raise FileNotFoundError(f"配置文件不存在: {path}")
 
-    backup = backup_file(path)
-    write_json(path, config)
-
-    validate_result = run_shell(
-        f"{OPENCLAW_BIN} {'--profile ' + profile if profile != 'default' else ''} config validate --json || true",
-        timeout_ms=20000,
-    )
-    maybe_restart = None
-    if payload.get("restartAfterSave"):
-        maybe_restart = run_systemctl_action(service_name_for_profile(profile), "restart")
-
-    return {
+    result = {
         "savedAt": utc_now_iso(),
-        "configPath": str(path),
-        "backupPath": str(backup) if backup else None,
-        "validate": {
-            "stdout": validate_result.stdout,
-            "stderr": validate_result.stderr,
-            "returncode": validate_result.returncode,
-        },
-        "restart": maybe_restart,
+        "profile": profile,
+        "restartAfterSave": restart_after_save,
+        "writePerformed": False,
+        "rollbackPerformed": False,
     }
+    result.update(_persist_validated_profile_config(profile, config))
+    if result["validate"]["returncode"] != 0:
+        result["status"] = "failed"
+        result["error"] = "配置校验失败，已回滚"
+        return result
+
+    if restart_after_save:
+        restart_result = run_systemctl_action(service_name_for_profile(profile), "restart")
+        result["restart"] = restart_result
+        if restart_result["returncode"] != 0:
+            result["status"] = "failed"
+            result["error"] = "配置已保存，但重启失败"
+            return result
+
+    result["status"] = "saved"
+    feishu_summary = summarize_feishu_channel(config)
+    if config_requests_feishu(feishu_summary):
+        result["feishuRuntime"] = gather_feishu_runtime_status(profile)
+    return result

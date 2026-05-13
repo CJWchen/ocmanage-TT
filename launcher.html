@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Workspace Launcher</title>
+<style>
+  :root {
+    --bg: #1a1b1e;
+    --card: #25262b;
+    --card-hover: #2c2e33;
+    --border: #373a40;
+    --text: #c1c2c5;
+    --text-dim: #909296;
+    --primary: #4c6ef5;
+    --primary-hover: #3b5bdb;
+    --green: #40c057;
+    --red: #fa5252;
+    --yellow: #fab005;
+    --radius: 10px;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 40px 20px;
+  }
+  h1 {
+    font-size: 24px;
+    font-weight: 600;
+    margin-bottom: 8px;
+    color: #fff;
+  }
+  .subtitle {
+    color: var(--text-dim);
+    font-size: 14px;
+    margin-bottom: 32px;
+  }
+  .projects {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    width: 100%;
+    max-width: 640px;
+  }
+  .project {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+    transition: background 0.15s;
+  }
+  .project:hover { background: var(--card-hover); }
+  .project-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+  }
+  .project-name {
+    font-size: 16px;
+    font-weight: 600;
+    color: #fff;
+  }
+  .project-path {
+    font-size: 12px;
+    color: var(--text-dim);
+    font-family: "SF Mono", "Fira Code", monospace;
+    margin-top: 2px;
+  }
+  .status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+  }
+  .status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+  }
+  .status-dot.running { background: var(--green); }
+  .status-dot.stopped { background: var(--text-dim); }
+  .actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+    flex-wrap: wrap;
+  }
+  .actions .hint {
+    width: 100%;
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-top: 4px;
+  }
+  button {
+    padding: 8px 18px;
+    border-radius: 6px;
+    border: none;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.12s;
+    font-family: inherit;
+  }
+  button:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  .btn-start {
+    background: var(--green);
+    color: #fff;
+  }
+  .btn-start:hover:not(:disabled) { background: #2f9e44; }
+  .btn-stop {
+    background: var(--red);
+    color: #fff;
+  }
+  .btn-stop:hover:not(:disabled) { background: #e03131; }
+  .btn-restart {
+    background: var(--primary);
+    color: #fff;
+  }
+  .btn-restart:hover:not(:disabled) { background: var(--primary-hover); }
+  .btn-log {
+    background: transparent;
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+  }
+  .btn-log:hover { color: var(--text); border-color: var(--text-dim); }
+  .port-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: rgba(76, 110, 245, 0.15);
+    color: var(--primary);
+    font-size: 12px;
+    font-family: monospace;
+  }
+  .log-area {
+    margin-top: 12px;
+    background: #000;
+    border-radius: 6px;
+    padding: 12px;
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.25s ease, padding 0.25s ease;
+    color: #a0a0a0;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+  .log-area.open {
+    max-height: 400px;
+    padding: 12px;
+    overflow-y: auto;
+  }
+  .log-area .info  { color: #66d9ef; }
+  .log-area .ok    { color: #a6e22e; }
+  .log-area .error { color: #f92672; }
+  .toast {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 20px;
+    font-size: 14px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    opacity: 0;
+    transition: opacity 0.2s;
+    pointer-events: none;
+    z-index: 100;
+  }
+  .toast.show { opacity: 1; }
+  .refresh-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 24px;
+    max-width: 640px;
+    width: 100%;
+  }
+  .refresh-bar button {
+    background: transparent;
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    padding: 6px 14px;
+  }
+  .refresh-bar button:hover { color: var(--text); border-color: var(--text-dim); }
+.refresh-bar .hint { font-size: 13px; color: var(--text-dim); }
+  .nav-links {
+    width: 100%;
+    max-width: 640px;
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-bottom: 14px;
+  }
+  .nav-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 14px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: rgba(255,255,255,0.02);
+    color: var(--text);
+    text-decoration: none;
+    font-size: 13px;
+    transition: all 0.12s;
+  }
+  .nav-link:hover {
+    border-color: var(--text-dim);
+    color: #fff;
+    background: rgba(255,255,255,0.05);
+  }
+</style>
+</head>
+<body>
+
+<h1>🧩 Workspace Launcher</h1>
+<p class="subtitle">一键启动 / 停止工作区项目</p>
+
+<div class="nav-links">
+  <a class="nav-link" href="./openclaw_manager.html">🛠 OpenClaw 管理台</a>
+</div>
+
+<div id="server-banner" style="display:none;max-width:640px;width:100%;padding:10px 16px;margin-bottom:16px;border-radius:8px;font-size:13px;background:#2e1a1a;border:1px solid #5c2020;color:#ffa8a8;"></div>
+
+<div class="refresh-bar">
+  <button onclick="refreshAll()">🔄 刷新状态</button>
+  <span class="hint" id="last-refresh"></span>
+</div>
+
+<div class="projects" id="projects"></div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ========== 项目配置 ==========
+const BACKEND_URL = 'http://127.0.0.1:58080';
+
+const PROJECTS = [
+  {
+    id: 'next-ai-draw-io',
+    name: 'Next AI Draw.io',
+    desc: 'AI 驱动的图表绘制工具',
+    dir: '/home/yun/桌面/workspace/next-ai-draw-io',
+    port: 6002,
+    startCmd: `cd ${esc('/home/yun/桌面/workspace/next-ai-draw-io')} && bash start.sh`,
+    stopCmd: `cd ${esc('/home/yun/桌面/workspace/next-ai-draw-io')} && bash stop.sh`,
+    checkCmd: `ss -tlnp "sport = :6002" 2>/dev/null | grep -c LISTEN`
+  },
+  {
+    id: 'open-design',
+    name: 'Open Design',
+    desc: 'Daemon (7456) + Web (3000) + Landing (17574)',
+    dir: '/home/yun/桌面/workspace/open-design',
+    port: 3000,
+    startCmd: `bash ${esc('/home/yun/桌面/workspace/manager-TT/start-od.sh')}`,
+    stopCmd: `bash ${esc('/home/yun/桌面/workspace/manager-TT/stop-od.sh')}`,
+    checkCmd: `ss -tlnp "sport = :7456" 2>/dev/null | grep -c LISTEN`
+  },
+  {
+    id: 'ccs',
+    name: 'CC Switch',
+    desc: 'Tauri desktop app + Vite dev server (3001)',
+    dir: '/home/yun/桌面/workspace/cc-switch',
+    port: 3001,
+    startCmd: `bash ${esc('/home/yun/桌面/workspace/manager-TT/start-ccs.sh')}`,
+    stopCmd: `bash ${esc('/home/yun/桌面/workspace/manager-TT/stop-ccs.sh')}`,
+    checkCmd: `ss -tlnp "sport = :3001" 2>/dev/null | grep -c LISTEN`
+  },
+  {
+    id: 'newapi',
+    name: 'New API',
+    desc: 'Docker container backed by /home/yun/desktop/workspace/new-api/data',
+    dir: '/home/yun/desktop/workspace/new-api',
+    port: 3000,
+    startCmd: `bash ${esc('/home/yun/桌面/workspace/manager-TT/start-newapi.sh')}`,
+    stopCmd: `bash ${esc('/home/yun/桌面/workspace/manager-TT/stop-newapi.sh')}`,
+    checkCmd: `docker inspect -f "{{.State.Running}}" new-api 2>/dev/null | grep -c true`
+  },
+  {
+    id: 'jadeai',
+    name: 'JadeAI',
+    desc: 'Docker container (twwch/jadeai), AI 驱动的工作流平台',
+    dir: '/home/yun/desktop/workspace/JadeAI',
+    port: 3003,
+    startCmd: `bash ${esc('/home/yun/desktop/workspace/manager-TT/start-jadeai.sh')}`,
+    stopCmd: `bash ${esc('/home/yun/desktop/workspace/manager-TT/stop-jadeai.sh')}`,
+    checkCmd: `docker inspect -f "{{.State.Running}}" jadeai 2>/dev/null | grep -c true`
+  }
+];
+
+function esc(s) { return s.replace(/'/g, "'\\''"); }
+
+// ========== 状态管理 ==========
+const state = {};
+const logs = {};
+
+async function checkStatus(proj) {
+  try {
+    const resp = await fetch(`${BACKEND_URL}/cgi-bin/exec`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cmd: proj.checkCmd })
+    });
+    const data = await resp.json();
+    return data.stdout && data.stdout.trim() !== '0' ? 'running' : 'stopped';
+  } catch {
+    return 'unknown';
+  }
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2500);
+}
+
+// ========== 渲染 ==========
+function render() {
+  const container = document.getElementById('projects');
+  container.innerHTML = PROJECTS.map(p => {
+    const s = state[p.id] || { status: 'unknown', pid: '' };
+    const running = s.status === 'running';
+    return `
+      <div class="project" id="proj-${p.id}">
+        <div class="project-header">
+          <div>
+            <div class="project-name">${p.name}</div>
+            <div class="project-path">${p.dir}</div>
+          </div>
+          <div class="status">
+            <span class="status-dot ${running ? 'running' : 'stopped'}"></span>
+            <span id="status-${p.id}">${running ? '运行中' : '已停止'}</span>
+            ${p.port ? `<span class="port-badge">:${p.port}</span>` : ''}
+          </div>
+        </div>
+        <div style="font-size:13px;color:var(--text-dim)">${p.desc}</div>
+        <div class="actions">
+          <button class="btn-start" id="start-${p.id}" onclick="runAction('${p.id}','start')"
+            ${running ? 'disabled' : ''}>
+            ▶ 启动
+          </button>
+          <button class="btn-stop" id="stop-${p.id}" onclick="runAction('${p.id}','stop')"
+            ${!running ? 'disabled' : ''}>
+            ⏹ 停止
+          </button>
+          <button class="btn-restart" id="restart-${p.id}" onclick="runAction('${p.id}','restart')">
+            ↻ 重启
+          </button>
+          <button class="btn-log" id="log-${p.id}" onclick="toggleLog('${p.id}')">
+            📋 日志
+          </button>
+          ${p.id === 'open-design' ? '<div class="hint">⚡ 一键启动 daemon + web + landing，首次构建约需 2-3 分钟</div>' : ''}
+          ${p.id === 'ccs' ? '<div class="hint">⚡ 使用固定的 3001 端口和本机可用 Rust 工具链覆盖启动</div>' : ''}
+          ${p.id === 'newapi' ? '<div class="hint">⚠ 与 Open Design 共享 3000 端口，不能同时占用该端口</div>' : ''}
+        </div>
+        <div class="log-area" id="logarea-${p.id}"></div>
+      </div>
+    `;
+  }).join('');
+}
+
+// ========== 操作 ==========
+async function runAction(id, action) {
+  const proj = PROJECTS.find(p => p.id === id);
+  if (!proj) return;
+
+  const btnStart = document.getElementById(`start-${id}`);
+  const btnStop  = document.getElementById(`stop-${id}`);
+  const logArea  = document.getElementById(`logarea-${id}`);
+
+  // 打开日志面板
+  logArea.classList.add('open');
+
+  let cmd;
+  if (action === 'start') {
+    cmd = proj.startCmd;
+  } else if (action === 'stop') {
+    cmd = proj.stopCmd;
+  } else if (action === 'restart') {
+    cmd = `${proj.stopCmd}; sleep 1; ${proj.startCmd}`;
+  }
+
+  appendLog(id, `> ${action} ${proj.name}...`, 'info');
+  btnStart.disabled = true;
+  btnStop.disabled = true;
+
+  try {
+    const resp = await fetch(`${BACKEND_URL}/cgi-bin/exec`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cmd, timeout: 15000 })
+    });
+    const data = await resp.json();
+    if (data.stdout) appendLog(id, data.stdout, 'ok');
+    if (data.stderr) appendLog(id, data.stderr, 'error');
+    if (data.error)  appendLog(id, `ERROR: ${data.error}`, 'error');
+  } catch (e) {
+    appendLog(id, `Fetch failed: ${e.message}`, 'error');
+  }
+
+  // 延迟后刷新状态
+  setTimeout(() => refreshOne(id), 2000);
+  showToast(`${action} ${proj.name} — 命令已执行`);
+}
+
+function appendLog(id, text, cls = '') {
+  const el = document.getElementById(`logarea-${id}`);
+  if (!el) return;
+  const line = document.createElement('div');
+  line.className = cls || '';
+  line.textContent = text;
+  el.appendChild(line);
+  el.scrollTop = el.scrollHeight;
+}
+
+function toggleLog(id) {
+  const el = document.getElementById(`logarea-${id}`);
+  el.classList.toggle('open');
+}
+
+// ========== 状态刷新 ==========
+async function refreshOne(id) {
+  const proj = PROJECTS.find(p => p.id === id);
+  if (!proj) return;
+  const status = await checkStatus(proj);
+  state[id] = { ...state[id], status };
+  updateUI(id);
+}
+
+async function checkBackend() {
+  const banner = document.getElementById('server-banner');
+  try {
+    const resp = await fetch(`${BACKEND_URL}/cgi-bin/status`, { signal: AbortSignal.timeout(2000) });
+    const ok = resp.ok && (await resp.json()).status === 'ok';
+    banner.style.display = ok ? 'none' : 'block';
+    if (!ok) banner.innerHTML = '⚠️ 后端服务器异常，请运行 <b>start_launcher.sh</b> 启动服务';
+  } catch {
+    banner.style.display = 'block';
+    banner.innerHTML = '⚠️ 后端服务器未连接，请运行 <b>start_launcher.sh</b> 启动服务';
+  }
+}
+
+async function refreshAll() {
+  document.getElementById('last-refresh').textContent = '刷新中...';
+  await checkBackend();
+  await Promise.all(PROJECTS.map(p => refreshOne(p.id)));
+  document.getElementById('last-refresh').textContent =
+    `上次更新: ${new Date().toLocaleTimeString()}`;
+}
+
+function updateUI(id) {
+  const s = state[id];
+  if (!s) return;
+  const running = s.status === 'running';
+  const dot = document.querySelector(`#proj-${id} .status-dot`);
+  const label = document.getElementById(`status-${id}`);
+  if (dot) dot.className = `status-dot ${running ? 'running' : 'stopped'}`;
+  if (label) label.textContent = running ? '运行中' : '已停止';
+  const btnStart = document.getElementById(`start-${id}`);
+  const btnStop  = document.getElementById(`stop-${id}`);
+  if (btnStart) btnStart.disabled = running;
+  if (btnStop)  btnStop.disabled = !running;
+}
+
+// ========== CGI 后端 ==========
+// 内嵌一个轻量 CGI 服务，用 python3 http.server + cgi 处理 /cgi-bin/exec
+// 由 setup.sh 负责部署
+// 前端 fallback: 如果 CGI 不可用，显示提示
+
+// ========== 初始化 ==========
+render();
+refreshAll();
+// 每 30 秒自动刷新状态
+setInterval(refreshAll, 30000);
+</script>
+</body>
+</html>
