@@ -28,8 +28,14 @@ from .config import (
 from .system import list_port_owners, run_openclaw_command, run_shell
 
 DEFAULT_PORT = 18789
+
+# PORT_STEP: 每个实例分配的端口范围大小，1000 足够用于 gateway + 内部服务
 PORT_STEP = 1000
+
+# MIN_PORT_GAP: 与系统保留端口的最小距离，避免与常用服务冲突
 MIN_PORT_GAP = 120
+
+# MAX_PORT: 端口上限，低于 65535 以预留空间给临时端口
 MAX_PORT = 64789
 OPENCLAW_IMAGE_REPO = "ghcr.io/openclaw/openclaw"
 VERSION_PATTERN = re.compile(r"\b(\d+(?:\.\d+){2,}(?:[-A-Za-z0-9.]+)?)\b")
@@ -93,13 +99,14 @@ def suggest_next_gateway_port(existing_ports: list[int]) -> int:
     raise ValueError("未找到可用端口")
 
 
-def find_next_available_gateway_port(existing_ports: list[int]) -> int:
+def find_next_available_gateway_port(existing_ports: list[int], max_attempts: int = 100) -> int:
     blocked_ports = list(existing_ports)
-    while True:
+    for _ in range(max_attempts):
         candidate = suggest_next_gateway_port(blocked_ports)
         if not list_port_owners(candidate):
             return candidate
         blocked_ports.append(candidate)
+    raise ValueError(f"无法在 {max_attempts} 次尝试内找到可用端口")
 
 
 def _format_port_owner(owner: dict) -> str:

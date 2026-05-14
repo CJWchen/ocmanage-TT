@@ -1,0 +1,78 @@
+# Service Registry Configuration
+# Defines external services to be managed by the control panel
+
+services:
+  # Docker-based services
+  - id: jadeai
+    name: JadeAI
+    type: docker
+    description: "AI 驱动的工作流平台"
+    container_name: jadeai
+    port: 3003
+    icon: "ai"
+    health_check:
+      enabled: true
+      endpoint: "http://localhost:{port}/api/health"
+    extra:
+      image: "twwch/jadeai:latest"
+      data_dir: "/home/yun/desktop/workspace/JadeAI/jadeai-data"
+
+  - id: newapi
+    name: New API
+    type: docker
+    description: "API 网关服务"
+    container_name: new-api
+    port: 3000
+    icon: "api"
+    extra:
+      image: "calciumion/new-api:latest"
+      data_dir: "/home/yun/desktop/workspace/new-api/data"
+
+  # Process-based services
+  - id: cc-switch
+    name: CC Switch
+    type: process
+    description: "Tauri desktop app + Vite dev server"
+    port: 3001
+    icon: "desktop"
+    working_dir: "/home/yun/桌面/workspace/cc-switch"
+    start_script: "/home/yun/桌面/workspace/manager-TT/start-ccs.sh"
+    stop_script: "/home/yun/桌面/workspace/manager-TT/stop-ccs.sh"
+    log_file: "/tmp/ccs-dev.log"
+    process_patterns:
+      - "pnpm exec vite --port 3001"
+      - "tauri dev"
+    extra:
+      rust_toolchain: "1.95.0-x86_64-unknown-linux-gnu"
+
+  - id: open-design
+    name: Open Design
+    type: process
+    description: "多进程 monorepo - Daemon/Web/Landing"
+    ports: [3000, 7456, 17574]
+    primary_port: 7456
+    icon: "design"
+    working_dir: "/home/yun/桌面/workspace/open-design"
+    start_script: "/home/yun/桌面/workspace/manager-TT/start-od.sh"
+    stop_script: "/home/yun/桌面/workspace/manager-TT/stop-od.sh"
+    log_file: "/tmp/od-all.log"
+    process_patterns:
+      - "pnpm --filter @open-design/daemon"
+      - "pnpm --filter @open-design/web"
+      - "pnpm --filter @open-design/landing-page"
+    extra:
+      components:
+        - name: daemon
+          port: 7456
+        - name: web
+          port: 3000
+        - name: landing
+          port: 17574
+
+# Icon mapping for frontend display
+icons:
+  ai: "🤖"
+  api: "🔌"
+  desktop: "🖥️"
+  design: "🎨"
+  default: "📦"

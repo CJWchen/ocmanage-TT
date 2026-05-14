@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
-
-CCS_DIR="/home/yun/桌面/workspace/cc-switch"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+WORKSPACE_DIR="$(dirname "$SCRIPT_DIR")"
+CCS_DIR="$WORKSPACE_DIR/cc-switch"
 DEV_PORT=3001
 
 echo "[ccs] Stopping CC Switch..."

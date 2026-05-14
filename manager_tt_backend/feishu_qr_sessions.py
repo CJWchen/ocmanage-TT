@@ -160,6 +160,20 @@ class FeishuQrSessionManager:
         self._lock = threading.Lock()
         self._sessions: dict[str, FeishuQrSession] = {}
 
+    def cleanup_inactive_sessions(self) -> int:
+        """Remove sessions that are no longer active.
+
+        Returns:
+            Number of sessions removed.
+        """
+        removed = 0
+        with self._lock:
+            to_remove = [profile for profile, session in self._sessions.items() if not session.is_active()]
+            for profile in to_remove:
+                del self._sessions[profile]
+                removed += 1
+        return removed
+
     def _reader_loop(self, session: FeishuQrSession) -> None:
         try:
             while True:
@@ -233,8 +247,8 @@ class FeishuQrSessionManager:
                 self._sessions.pop(normalized_profile, None)
 
             master_fd, slave_fd = pty.openpty()
-            command = build_feishu_qr_command(normalized_profile, verbose=verbose, runtime=runtime_context)
             try:
+                command = build_feishu_qr_command(normalized_profile, verbose=verbose, runtime=runtime_context)
                 set_pty_window_size(slave_fd)
                 process = subprocess.Popen(
                     command,
@@ -246,22 +260,28 @@ class FeishuQrSessionManager:
                     start_new_session=True,
                     close_fds=True,
                 )
-            except Exception:
-                os.close(master_fd)
                 os.close(slave_fd)
+                session = FeishuQrSession(
+                    profile=normalized_profile,
+                    command=command,
+                    process=process,
+                    master_fd=master_fd,
+                    started_at=utc_now_iso(),
+                )
+                self._sessions[normalized_profile] = session
+                thread = threading.Thread(target=self._reader_loop, args=(session,), daemon=True)
+                thread.start()
+                return session.snapshot(include_output=True)
+            except Exception:
+                try:
+                    os.close(master_fd)
+                except OSError:
+                    pass
+                try:
+                    os.close(slave_fd)
+                except OSError:
+                    pass
                 raise
-            os.close(slave_fd)
-            session = FeishuQrSession(
-                profile=normalized_profile,
-                command=command,
-                process=process,
-                master_fd=master_fd,
-                started_at=utc_now_iso(),
-            )
-            self._sessions[normalized_profile] = session
-            thread = threading.Thread(target=self._reader_loop, args=(session,), daemon=True)
-            thread.start()
-            return session.snapshot(include_output=True)
 
     def status(self, profile: str, *, include_output: bool = True) -> dict:
         normalized_profile = normalize_profile(profile)
@@ -337,3 +357,12 @@ def send_feishu_qr_input(profile: str, text: str) -> dict:
 
 def ensure_feishu_qr_session_unlocked(profile: str, *, scope: str = "修改配置") -> None:
     _MANAGER.ensure_profile_unlocked(profile, scope=scope)
+
+
+def cleanup_inactive_feishu_qr_sessions() -> int:
+    """Remove inactive Feishu QR sessions to prevent memory leaks.
+
+    Returns:
+        Number of sessions removed.
+    """
+    return _MANAGER.cleanup_inactive_sessions()

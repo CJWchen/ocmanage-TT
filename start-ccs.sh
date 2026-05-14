@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
-
-CCS_DIR="/home/yun/桌面/workspace/cc-switch"
-LOG="/tmp/ccs-dev.log"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+WORKSPACE_DIR="$(dirname "$SCRIPT_DIR")"
+CCS_DIR="$WORKSPACE_DIR/cc-switch"
+LOG_DIR="${XDG_RUNTIME_DIR:-${HOME}/.local/state}/manager-tt"
+mkdir -p "$LOG_DIR"
+LOG="$LOG_DIR/ccs-dev.log"
 DEV_PORT=3001
 RUST_TOOLCHAIN="1.95.0-x86_64-unknown-linux-gnu"
 RUST_BIN="/home/yun/.rustup/toolchains/${RUST_TOOLCHAIN}/bin"

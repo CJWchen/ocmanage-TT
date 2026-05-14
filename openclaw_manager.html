@@ -1715,12 +1715,9 @@ function renderAll() {
 // ===== Actions =====
 async function refreshAll(silent = false) {
   try {
-    const [summary, diagnostics] = await Promise.all([
-      apiGet('/api/openclaw/summary'),
-      apiGet('/api/openclaw/diagnostics'),
-    ]);
+    // Load summary first (lightweight), defer diagnostics to background
+    const summary = await apiGet('/api/openclaw/summary');
     app.summary = summary;
-    app.diagnostics = diagnostics;
     renderCreateModeState();
 
     const profiles = summary.instances.map(i => i.profile);
@@ -1739,8 +1736,22 @@ async function refreshAll(silent = false) {
       renderOps();
     }
     if (!silent) showToast('已刷新');
+
+    // Load diagnostics in background (non-blocking)
+    loadDiagnosticsBackground();
   } catch (e) {
     showToast(`刷新失败: ${e.message}`, 'error');
+  }
+}
+
+async function loadDiagnosticsBackground() {
+  try {
+    const diagnostics = await apiGet('/api/openclaw/diagnostics');
+    app.diagnostics = diagnostics;
+    renderSidebar();
+    renderOverview();
+  } catch (e) {
+    // Silently fail for background load
   }
 }
 
@@ -1779,14 +1790,18 @@ async function selectProfile(profile, silent = false) {
   app.selectedProfile = profile;
   renderSidebar();
   try {
-    const detail = await apiGet(`/api/openclaw/instance?profile=${encodeURIComponent(profile)}`);
+    // Load instance detail and logs in parallel
+    const [detail, logsResult] = await Promise.all([
+      apiGet(`/api/openclaw/instance?profile=${encodeURIComponent(profile)}`),
+      apiGet(`/api/openclaw/logs?profile=${encodeURIComponent(profile)}&lines=120`),
+    ]);
     storeProfileDetail(detail);
     renderContentHead();
     renderOverview();
     renderDetail();
     renderConfig();
     renderOps();
-    await loadLogs(120, true);
+    renderLogs(logsResult.logs, 120);
     if (!silent) showToast(profile);
   } catch (e) {
     showToast(`加载失败: ${e.message}`, 'error');

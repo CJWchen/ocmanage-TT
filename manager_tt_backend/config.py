@@ -26,6 +26,7 @@ OPENCLAW_HOME = HOME / ".openclaw"
 OPENCLAW_SYSTEMD_DIR = HOME / ".config" / "systemd" / "user"
 MANAGER_CONFIG_DIR = HOME / ".config" / "manager-tt"
 OPENCLAW_BRIDGE_TOKEN_DIR = MANAGER_CONFIG_DIR / "openclaw-bridge"
+MANAGEMENT_TOKEN_PATH = MANAGER_CONFIG_DIR / "management.token"
 MANAGER_AUDIT_LOG = MANAGER_CONFIG_DIR / "openclaw-action-audit.jsonl"
 OPENCLAW_INSTANCE_BIN = HOME / ".local" / "bin" / "openclaw-instance"
 OPENCLAW_BIN = HOME / ".npm-global" / "bin" / "openclaw"
@@ -38,17 +39,48 @@ DEFAULT_TIMEOUT_MS = 15000
 MAX_TIMEOUT_MS = 60000
 
 OPENCLAW_RESERVED_PROFILES = {"default"}
-EXEC_DANGEROUS_PATTERNS = [
-    "rm -rf",
-    "mkfs",
-    "dd if=",
-    "> /dev/",
-    ":(){ :|:& };:",
+
+# Whitelist for allowed command patterns in /cgi-bin/exec endpoint
+# Only safe read-only and launcher control commands are permitted
+EXEC_ALLOWED_COMMANDS = [
+    # Port/socket status checks
+    r"ss\s+-tlnp\s+",
+    r"ss\s+-ltnpH\s+",
+    r"ss\s+-tlnp\s+",
+    # Docker inspect (read-only)
+    r"docker\s+inspect\s+",
+    # systemctl status/daemon-reload (safe operations)
+    r"systemctl\s+--user\s+show\s+",
+    r"systemctl\s+--user\s+status\s+",
+    r"systemctl\s+status\s+",
+    # journalctl (read-only logs)
+    r"journalctl\s+--user\s+",
+    # Predefined launcher scripts (absolute paths only)
+    r"bash\s+/home/yun/桌面/workspace/manager-TT/start-\w+\.sh",
+    r"bash\s+/home/yun/桌面/workspace/manager-TT/stop-\w+\.sh",
+    # Safe project start scripts (whitelisted absolute paths)
+    r"cd\s+/home/yun/桌面/workspace/\w[\w\-]*\s+&&\s+bash\s+start\.sh",
+    r"cd\s+/home/yun/桌面/workspace/\w[\w\-]*\s+&&\s+bash\s+stop\.sh",
 ]
+
+import re
+
+EXEC_ALLOWED_REGEXES = [re.compile(pattern) for pattern in EXEC_ALLOWED_COMMANDS]
+
+
+def is_exec_command_allowed(cmd: str) -> bool:
+    """Validate command against whitelist of allowed patterns."""
+    if not cmd or not isinstance(cmd, str):
+        return False
+    stripped = cmd.strip()
+    for regex in EXEC_ALLOWED_REGEXES:
+        if regex.search(stripped):
+            return True
+    return False
 
 
 def utc_now_iso() -> str:
-    return dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+    return dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def load_json(path: Path) -> dict:
@@ -127,6 +159,25 @@ def ensure_bridge_token(profile: str) -> Path:
     path.write_text(secrets.token_urlsafe(32) + "\n", encoding="utf-8")
     path.chmod(0o600)
     return path
+
+
+def read_management_token() -> str | None:
+    """Read the management API token from file."""
+    if not MANAGEMENT_TOKEN_PATH.exists():
+        return None
+    token = MANAGEMENT_TOKEN_PATH.read_text(encoding="utf-8").strip()
+    return token or None
+
+
+def ensure_management_token() -> Path:
+    """Ensure a management token exists, creating one if needed."""
+    MANAGER_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    existing = read_management_token()
+    if existing:
+        return MANAGEMENT_TOKEN_PATH
+    MANAGEMENT_TOKEN_PATH.write_text(secrets.token_urlsafe(32) + "\n", encoding="utf-8")
+    MANAGEMENT_TOKEN_PATH.chmod(0o600)
+    return MANAGEMENT_TOKEN_PATH
 
 
 def bridge_base_url() -> str:

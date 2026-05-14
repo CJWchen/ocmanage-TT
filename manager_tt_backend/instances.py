@@ -4,6 +4,7 @@ import hmac
 import json
 import re
 import datetime as dt
+import time
 from pathlib import Path
 
 from .config import (
@@ -13,6 +14,7 @@ from .config import (
     MANAGER_ROOT,
     OPENCLAW_BIN,
     OPENCLAW_INSTANCE_BIN,
+    MANAGEMENT_TOKEN_PATH,
     append_jsonl,
     build_host_control_bridge,
     config_path_for_profile,
@@ -22,6 +24,7 @@ from .config import (
     normalize_profile,
     override_path_for_service,
     read_bridge_token,
+    read_management_token,
     read_runtime_meta,
     service_name_for_profile,
     settings,
@@ -45,6 +48,28 @@ from .system import (
     read_text_if_exists,
     shell_join,
 )
+
+# Cache for collect_runtime_info results (short TTL to avoid redundant shell calls)
+_RUNTIME_INFO_CACHE: dict[str, tuple[float, dict]] = {}
+_RUNTIME_INFO_CACHE_TTL = 2.0  # seconds
+
+
+def _get_cached_runtime_info(profile: str) -> dict | None:
+    """Get cached runtime info if still valid."""
+    entry = _RUNTIME_INFO_CACHE.get(profile)
+    if entry is None:
+        return None
+    timestamp, data = entry
+    if time.time() - timestamp > _RUNTIME_INFO_CACHE_TTL:
+        del _RUNTIME_INFO_CACHE[profile]
+        return None
+    return data
+
+
+def _cache_runtime_info(profile: str, data: dict) -> dict:
+    """Cache runtime info with short TTL."""
+    _RUNTIME_INFO_CACHE[profile] = (time.time(), data)
+    return data
 
 SESSION_PATH_FIELDS = (
     "workspaceDir",
@@ -237,6 +262,11 @@ def build_human_runtime_rules(profile: str, runtime: dict) -> list[str]:
 
 
 def collect_runtime_info(profile: str) -> dict:
+    # Check cache first to avoid redundant shell calls
+    cached = _get_cached_runtime_info(profile)
+    if cached is not None:
+        return cached
+
     service_name = service_name_for_profile(profile)
     props = read_systemd_show(service_name)
     port = read_config_port(profile)
@@ -245,7 +275,7 @@ def collect_runtime_info(profile: str) -> dict:
     runtime_override_path = override_path_for_service(service_name)
     runtime_meta = read_runtime_meta(profile)
     docker_runtime = inspect_docker_runtime(runtime_meta) if runtime_meta else None
-    return {
+    return _cache_runtime_info(profile, {
         "serviceName": service_name,
         "mainPid": int(props.get("MainPID", "0") or "0"),
         "activeState": props.get("ActiveState", "unknown"),
@@ -268,7 +298,7 @@ def collect_runtime_info(profile: str) -> dict:
             if normalize_runtime_mode((runtime_meta or {}).get("runtimeMode")) == "docker"
             else None
         ),
-    }
+    })
 
 
 def find_docker_session_host_path_refs(profile: str, summary: dict | None = None, runtime: dict | None = None) -> list[str]:
@@ -413,6 +443,15 @@ def require_bridge_token(profile: str, token: str | None) -> None:
         raise PermissionError(f"{profile} 尚未配置宿主机控制桥 token")
     if not token or not hmac.compare_digest(expected, token.strip()):
         raise PermissionError("宿主机控制桥 token 无效")
+
+
+def require_management_token(token: str | None) -> None:
+    """Validate management API token for protected endpoints."""
+    expected = read_management_token()
+    if not expected:
+        raise PermissionError("管理端点未配置 token")
+    if not token or not hmac.compare_digest(expected, token.strip()):
+        raise PermissionError("管理 API token 无效")
 
 
 def record_manager_action(event: dict) -> None:
@@ -779,7 +818,23 @@ def read_instance(profile: str) -> dict:
     override_path = Path(runtime["overridePath"]) if runtime.get("overridePath") else None
     service_text = read_text_if_exists(service_path)
     override_text = read_text_if_exists(override_path)
-    feishu_runtime = gather_feishu_runtime_status(profile, runtime=runtime) if config_requests_feishu(summary.get("feishu") or {}) else None
+
+    # Skip expensive feishu checks if service is not active
+    feishu_config_summary = summary.get("feishu") or {}
+    feishu_runtime = None
+    if config_requests_feishu(feishu_config_summary):
+        # Only gather runtime status if service is active (saves 20-30s of openclaw commands)
+        if runtime.get("activeState") == "active":
+            feishu_runtime = gather_feishu_runtime_status(profile, runtime=runtime)
+        else:
+            feishu_runtime = {
+                "status": "not_running",
+                "ready": False,
+                "readyEvidence": None,
+                "issues": ["服务未运行，无法检查 Feishu 运行态"],
+                "notes": [],
+            }
+
     checks = build_instance_checks(profile, summary, runtime, service_text, override_text, feishu_runtime)
     return {
         "summary": summary,
@@ -876,6 +931,16 @@ def build_diagnostics() -> dict:
                     "message": f"service 未运行: {item.get('serviceName')} ({item.get('activeState')}/{item.get('subState')})",
                 }
             )
+
+    # Only call read_instance for checks if service is active (saves expensive feishu checks)
+    for item in instances:
+        profile = item.get("profile", "<unknown>")
+        if item.get("error"):
+            issues.append({"level": "error", "profile": profile, "message": item["error"]})
+            continue
+        # Skip read_instance if service is not active - already flagged above
+        if item.get("activeState") != "active":
+            continue
         try:
             detail = read_instance(profile)
             for check in detail["checks"]:
@@ -901,10 +966,6 @@ def build_diagnostics() -> dict:
                     "message": f"端口冲突: {port} 被多个 profile 配置: {', '.join(profiles)}",
                 }
             )
-
-    for item in instances:
-        if item.get("error"):
-            issues.append({"level": "error", "profile": item.get("profile"), "message": item["error"]})
 
     return {
         "generatedAt": utc_now_iso(),

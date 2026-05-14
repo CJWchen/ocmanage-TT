@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
-
-APP_DIR="/home/yun/desktop/workspace/JadeAI"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+WORKSPACE_DIR="$(dirname "$SCRIPT_DIR")"
+APP_DIR="$WORKSPACE_DIR/JadeAI"
 DATA_DIR="$APP_DIR/jadeai-data"
 CONTAINER_NAME="jadeai"
 IMAGE="twwch/jadeai:latest"
@@ -17,11 +18,19 @@ if docker inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
   fi
   docker start "$CONTAINER_NAME"
 else
+  # Use environment file for secrets (do not commit .env.jadeai)
+  ENV_FILE="$APP_DIR/.env.jadeai"
+  if [[ ! -f "$ENV_FILE" ]]; then
+    echo "[jadeai] ERROR: Environment file not found: $ENV_FILE"
+    echo "[jadeai] Please copy .env.jadeai.example to .env.jadeai and configure your secrets."
+    exit 1
+  fi
+
   docker run -d \
     --name "$CONTAINER_NAME" \
     --platform linux/amd64 \
     -p "$PORT:3000" \
-    -e AUTH_SECRET=wmd/jfIiNq9bEiDnSjqShUFzNLomIHFJWxOSQd2jnhc= \
+    --env-file "$ENV_FILE" \
     -e AUTH_ENABLED=false \
     -e DB_TYPE=sqlite \
     -v "$DATA_DIR:/app/data" \
